@@ -2,7 +2,7 @@ name: KR Market Daily
 
 on:
   schedule:
-    - cron: "33 22 * * 1-5"   # KST 07:33 월~금 (UTC 전날 22:33)
+    - cron: "33 00 * * 1-5"   # KST 09:33 월~금 (UTC 전날 22:33)
   workflow_dispatch:
     inputs:
       dry_run:
