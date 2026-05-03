@@ -1,6 +1,57 @@
-fredapi>=1.1.0
-yfinance>=0.2.40
-tweepy>=4.14.0
-supabase>=2.0.0
-requests>=2.31.0
-python-dotenv>=1.0.0
+# Investment OS — Python Dependencies (v1.9.0)
+# v1.9.0: 텔레그램 듀얼 채널 발행 추가
+
+# 데이터 수집
+yfinance==0.2.51
+fredapi==0.5.2
+feedparser==6.0.11
+
+# 데이터 처리
+pandas==2.2.3
+numpy==1.26.4
+
+# X (Twitter) 발행
+tweepy==4.14.0
+
+# 환경 설정
+python-dotenv==1.0.1
+
+# 스케줄러
+schedule==1.2.2
+
+# HTTP (텔레그램 Bot API 포함)
+requests==2.32.3
+
+# 유틸리티
+pytz==2024.2
+
+# 이미지 생성
+matplotlib>=3.8.0
+Pillow>=10.0.0
+
+# HTML 대시보드 렌더링
+playwright>=1.40.0
+
+# 주간 PDF 리포트
+reportlab>=4.0.0
+
+
+# 코믹
+anthropic>=0.25.0
+supabase==2.10.0
+openai>=1.30.0
+
+#제미나이
+google-generativeai>=0.8.0
+google-genai>=1.0.0
+
+
+#feedparser
+feedparser
+
+# v1.7.0 — Viral Targeting Policy 외부화 (2026-04-26)
+PyYAML>=6.0
+
+# v1.7.0 — Auto-Pruning System DB 접근 (2026-04-26)
+SQLAlchemy>=2.0,<3.0
+psycopg2-binary>=2.9
