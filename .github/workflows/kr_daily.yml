@@ -2,7 +2,7 @@ name: KR Market Daily
 
 on:
   schedule:
-    - cron: "33 00 * * 1-5"   # KST 09:33 월~금 (UTC 전날 22:33)
+    - cron: "00 00 * * 1-5"   # KST 09:33 월~금 (UTC 전날 22:33)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -29,11 +29,11 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # - name: Anti-bot random delay
-      #   run: |
-      #     DELAY=$((RANDOM % 500))
-      #     echo "⏱️ Random delay: ${DELAY}s ($((DELAY/60))m $((DELAY%60))s)"
-      #     sleep $DELAY    
+      - name: Anti-bot random delay
+        run: |
+          DELAY=$((RANDOM % 500))
+          echo "⏱️ Random delay: ${DELAY}s ($((DELAY/60))m $((DELAY%60))s)"
+          sleep $DELAY    
           
       - name: Run KR Market Pipeline
         env:
