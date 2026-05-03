@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 from config.settings import MAX_TWEET_LENGTH
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,14 @@ HASHTAG_POOL: list[str] = [
     "#외인수급", "#외국인매매",
     # 시황
     "#장전시황", "#오늘시황", "#투자참고", "#시장분석",
+]
+
+# 섹터 해시태그 풀 — tweet3 전용 (seed 기반 3개 선택)
+SECTOR_HASHTAG_POOL: list[str] = [
+    "#섹터분석", "#국장섹터", "#코스피섹터", "#테마분석",
+    "#반도체주", "#2차전지", "#AI주식", "#플랫폼주",
+    "#바이오주", "#자동차주", "#금융주", "#원자재",
+    "#수급분석", "#섹터흐름", "#투자테마",
 ]
 
 # Type A 고정 (2026-05-04 확정 / B·C·D 함수는 향후 확장용으로 코드 보존)
@@ -103,11 +111,13 @@ def format_daily_tweet(
     market_data: dict,
     signal_result: dict,
     seed: int | None = None,
+    sector_data: list[dict] | None = None,
 ) -> list[str]:
     """
-    X 발행용 트윗 2개 생성.
+    X 발행용 트윗 생성.
     - tweet[0]: 지표 본문 (포맷 타입에 따라 변형)
     - tweet[1]: 시그널 판정 + 해시태그
+    - tweet[2]: 섹터 흐름 비율 (sector_data 제공 시에만 추가)
     seed=None 이면 오늘 날짜 기반 자동 생성 (멱등성 보장).
     """
     if seed is None:
@@ -124,7 +134,15 @@ def format_daily_tweet(
     tweet1 = dispatch[fmt_type](market_data, title)
     tweet2 = _format_signal_tweet(signal_result, hashtags)
 
-    return [_truncate(tweet1), _truncate(tweet2)]
+    tweets = [_truncate(tweet1), _truncate(tweet2)]
+
+    # 섹터 데이터 있으면 tweet3 추가
+    if sector_data:
+        tweet3 = format_sector_tweet(sector_data, seed=seed)
+        if tweet3:
+            tweets.append(_truncate(tweet3))
+
+    return tweets
 
 
 # ---------------------------------------------------------------------------
@@ -333,3 +351,66 @@ def _truncate(text: str, limit: int = MAX_TWEET_LENGTH) -> str:
             break
         result = candidate
     return result + "…"
+
+# ---------------------------------------------------------------------------
+# 섹터 흐름 트윗 (tweet3)
+# ---------------------------------------------------------------------------
+
+_DIRECTION_EMOJI: dict[str, str] = {"up": "🟢", "down": "🔴", "flat": "⚪"}
+_BAR_FULL = "█"
+_BAR_HALF = "▌"
+_MAX_BAR = 6  # 최대 바 길이
+
+
+def format_sector_tweet(sector_data: list[dict], seed: int | None = None) -> str:
+    """
+    섹터 흐름 비율 트윗 생성.
+    sector_data: run_sector_engine() 반환값 (강도 내림차순 정렬됨)
+    seed: 해시태그 유동 선택용 (None이면 오늘 날짜 기반 자동 생성)
+    반환: 트윗 문자열 (비어있으면 빈 문자열)
+    """
+    if not sector_data:
+        return ""
+
+    if seed is None:
+        seed = _get_daily_seed()
+
+    today_str = date.today().strftime("%m/%d")
+    lines = [f"📊 섹터 흐름 | {today_str}", ""]
+
+    for s in sector_data:
+        emoji = _DIRECTION_EMOJI.get(s["direction"], "⚪")
+        name = s["name"]
+        chg = s["chg_pct"]
+        ratio = s["ratio"]
+        bar = _make_bar(ratio)
+        chg_str = f"▲{chg:.1f}%" if chg > 0 else f"▼{abs(chg):.1f}%" if chg < 0 else "─0.0%"
+
+        lines.append(f"{emoji} {name:<7} {chg_str:>7}  {bar}  {ratio:.0f}%")
+
+    lines.append("")
+    lines.append(_select_sector_hashtags(seed))
+
+    return "\n".join(lines)
+
+
+def _make_bar(ratio: float) -> str:
+    """비율(0~100)을 바 형태로 변환. 최대 _MAX_BAR칸."""
+    filled = round(ratio / 100 * _MAX_BAR)
+    filled = max(1, min(filled, _MAX_BAR))
+    return _BAR_FULL * filled + " " * (_MAX_BAR - filled)
+
+
+def _select_sector_hashtags(seed: int) -> str:
+    """SECTOR_HASHTAG_POOL에서 중복 없이 3개 분산 추출."""
+    selected: list[str] = []
+    used: set[int] = set()
+    for i in range(3):
+        idx = (seed * (i + 11) + i * 53) % len(SECTOR_HASHTAG_POOL)
+        attempts = 0
+        while idx in used and attempts < len(SECTOR_HASHTAG_POOL):
+            idx = (idx + 1) % len(SECTOR_HASHTAG_POOL)
+            attempts += 1
+        used.add(idx)
+        selected.append(SECTOR_HASHTAG_POOL[idx])
+    return " ".join(selected)

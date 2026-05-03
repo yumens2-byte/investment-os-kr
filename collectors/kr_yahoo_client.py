@@ -1,6 +1,6 @@
 """
 KR Market OS — Yahoo Finance 수집기
-KOSPI, KOSDAQ, 삼성전자, SK하이닉스, KRW/USD 환율 수집
+KOSPI, KOSDAQ, 삼성전자, SK하이닉스, KRW/USD 환율 + 섹터 대표 종목 수집
 주의: ^KS11, ^KQ11은 KST 기준 → ET 기준 실행 시 전일 종가 수집됨 (정상 동작)
 fast_info.last_price 방식은 period=1y download 의존으로 불안정 → history(period='5d') 사용
 """
@@ -12,10 +12,10 @@ from datetime import UTC, datetime
 
 import yfinance as yf
 
-from config.settings import YAHOO_TICKERS
+from config.settings import SECTOR_ALL_TICKERS, YAHOO_TICKERS
 from utils.retry import with_retry
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,25 @@ def collect_yahoo_data() -> dict:
     collected = sum(1 for k, v in results.items() if v is not None and k != "collected_at")
     logger.info(f"[Yahoo] 수집 완료: {collected}개 항목")
     return results
+
+
+def collect_sector_data() -> dict[str, float | None]:
+    """
+    섹터 대표 종목 등락률 수집.
+    SECTOR_ALL_TICKERS(기수집 제외) 전체를 수집하여
+    {티커: 등락률(%)} dict 반환.
+    수집 실패 종목은 None 처리.
+    """
+    logger.info(f"[Yahoo-Sector] 섹터 종목 수집 시작: {len(SECTOR_ALL_TICKERS)}개")
+    sector_raw: dict[str, float | None] = {}
+
+    for symbol in SECTOR_ALL_TICKERS:
+        data = _fetch_ticker(symbol)
+        sector_raw[symbol] = data.get("chg_pct") if data else None
+
+    ok = sum(1 for v in sector_raw.values() if v is not None)
+    logger.info(f"[Yahoo-Sector] 수집 완료: {ok}/{len(SECTOR_ALL_TICKERS)}개")
+    return sector_raw
 
 
 # ---------------------------------------------------------------------------
