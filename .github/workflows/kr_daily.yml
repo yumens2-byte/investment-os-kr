@@ -29,6 +29,12 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # - name: Anti-bot random delay
+      #   run: |
+      #     DELAY=$((RANDOM % 500))
+      #     echo "⏱️ Random delay: ${DELAY}s ($((DELAY/60))m $((DELAY%60))s)"
+      #     sleep $DELAY    
+          
       - name: Run KR Market Pipeline
         env:
           FRED_API_KEY:                ${{ secrets.FRED_API_KEY }}
@@ -41,4 +47,6 @@ jobs:
           SUPABASE_URL:                ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:                ${{ secrets.SUPABASE_KEY }}
           DRY_RUN:                     ${{ inputs.dry_run || 'false' }}
+
+      
         run: python run_market.py
