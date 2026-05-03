@@ -200,3 +200,50 @@ class TestRunKrEngine:
             "yield_spread", "market_signal", "signal_score",
         }
         assert required_keys.issubset(result.keys())
+
+
+# ---------------------------------------------------------------------------
+# 발행 게이트 테스트 (run_market._validate_required_data)
+# ---------------------------------------------------------------------------
+
+class TestPublishGate:
+    """발행 게이트 로직 검증."""
+
+    def _validate(self, data: dict) -> list[str]:
+        from run_market import _validate_required_data
+        return _validate_required_data(data)
+
+    def test_all_present_returns_empty(self):
+        data = {
+            "kospi": 2648.0, "kosdaq": 857.0,
+            "krw_usd": 1384.0, "us10y": 4.51, "dxy": 104.2,
+        }
+        assert self._validate(data) == []
+
+    def test_kospi_missing_blocks(self):
+        data = {
+            "kospi": None, "kosdaq": 857.0,
+            "krw_usd": 1384.0, "us10y": 4.51, "dxy": 104.2,
+        }
+        assert "kospi" in self._validate(data)
+
+    def test_all_missing_returns_all_required(self):
+        data = {}
+        missing = self._validate(data)
+        assert set(missing) == {"kospi", "kosdaq", "krw_usd", "us10y", "dxy"}
+
+    def test_partial_missing(self):
+        data = {"kospi": 2648.0, "kosdaq": None, "krw_usd": 1384.0, "us10y": None, "dxy": 104.2}
+        missing = self._validate(data)
+        assert "kosdaq" in missing
+        assert "us10y" in missing
+        assert "kospi" not in missing
+
+    def test_non_required_none_does_not_block(self):
+        """필수 아닌 필드(fedfunds 등)가 None이어도 게이트 통과."""
+        data = {
+            "kospi": 2648.0, "kosdaq": 857.0,
+            "krw_usd": 1384.0, "us10y": 4.51, "dxy": 104.2,
+            "fedfunds": None, "t10y2y": None, "samsung": None,
+        }
+        assert self._validate(data) == []

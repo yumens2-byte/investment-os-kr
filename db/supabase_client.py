@@ -1,5 +1,7 @@
 """
 KR Market OS — Supabase 클라이언트
+테이블: public.kr_daily_snapshots
+(kr 스키마는 PostgREST 미노출 → public 스키마 사용)
 """
 
 from __future__ import annotations
@@ -9,11 +11,13 @@ import os
 
 from supabase import Client, create_client
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
 _client: Client | None = None
+
+_TABLE = "kr_daily_snapshots"  # public 스키마 기본
 
 
 def get_client() -> Client:
@@ -31,13 +35,13 @@ def get_client() -> Client:
 
 def upsert_snapshot(data: dict) -> bool:
     """
-    kr.daily_snapshots 테이블에 upsert.
+    public.kr_daily_snapshots 테이블에 upsert.
     snapshot_date 기준 ON CONFLICT 처리.
     반환: 성공 True / 실패 False
     """
     try:
         client = get_client()
-        result = client.schema("kr").table("daily_snapshots").upsert(data).execute()
+        result = client.table(_TABLE).upsert(data).execute()
         logger.info(f"[Supabase] upsert 완료: {data.get('snapshot_date')}")
         return bool(result.data)
     except Exception as exc:

@@ -2,6 +2,7 @@
 KR Market OS — Yahoo Finance 수집기
 KOSPI, KOSDAQ, 삼성전자, SK하이닉스, KRW/USD 환율 수집
 주의: ^KS11, ^KQ11은 KST 기준 → ET 기준 실행 시 전일 종가 수집됨 (정상 동작)
+fast_info.last_price 방식은 period=1y download 의존으로 불안정 → history(period='5d') 사용
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import yfinance as yf
 from config.settings import YAHOO_TICKERS
 from utils.retry import with_retry
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +58,24 @@ def collect_yahoo_data() -> dict:
 def _fetch_ticker(symbol: str) -> dict | None:
     """
     단일 티커 수집 (3회 재시도 / 2초 간격).
+    history(period='5d') 사용 — fast_info.last_price보다 안정적.
     반환: {"price": float, "chg_pct": float} 또는 None
     """
 
     def _do_fetch() -> dict:
-        ticker = yf.Ticker(symbol)
-        info = ticker.fast_info
-        price = _safe_float(getattr(info, "last_price", None))
+        hist = yf.Ticker(symbol).history(period="5d")
+        if hist is None or hist.empty:
+            raise ValueError(f"{symbol} 데이터 없음")
+
+        price = _safe_float(hist["Close"].iloc[-1])
         if price is None:
-            raise ValueError(f"{symbol} 가격 없음")
-        prev_close = _safe_float(getattr(info, "previous_close", None))
+            raise ValueError(f"{symbol} 종가 파싱 실패")
+
+        prev_close = _safe_float(hist["Close"].iloc[-2]) if len(hist) >= 2 else None
         chg_pct = None
         if prev_close and prev_close != 0:
             chg_pct = round((price - prev_close) / prev_close * 100, 4)
+
         return {"price": price, "chg_pct": chg_pct}
 
     result = with_retry(_do_fetch, label=f"Yahoo {symbol}")
