@@ -11,6 +11,7 @@ import os
 
 from supabase import Client, create_client
 
+
 VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
