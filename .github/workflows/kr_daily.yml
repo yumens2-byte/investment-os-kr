@@ -29,11 +29,11 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Anti-bot random delay
-        run: |
-          DELAY=$((RANDOM % 500))
-          echo "⏱️ Random delay: ${DELAY}s ($((DELAY/60))m $((DELAY%60))s)"
-          sleep $DELAY    
+      # - name: Anti-bot random delay
+      #   run: |
+      #     DELAY=$((RANDOM % 500))
+      #     echo "⏱️ Random delay: ${DELAY}s ($((DELAY/60))m $((DELAY%60))s)"
+      #     sleep $DELAY    
           
       - name: Run KR Market Pipeline
         env:
