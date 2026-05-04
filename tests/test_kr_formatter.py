@@ -194,6 +194,10 @@ class TestFormatDailyTweet:
         tweets = format_daily_tweet(full_market_data, signal_result, seed=99)
         assert "#" in tweets[1]
 
+    def test_tweet2_contains_allocation_framework(self, full_market_data, signal_result):
+        tweets = format_daily_tweet(full_market_data, signal_result, seed=99)
+        assert "미장 70 : 국장 30" in tweets[1]
+
     def test_seed_idempotent(self, full_market_data, signal_result):
         tweets1 = format_daily_tweet(full_market_data, signal_result, seed=777)
         tweets2 = format_daily_tweet(full_market_data, signal_result, seed=777)
