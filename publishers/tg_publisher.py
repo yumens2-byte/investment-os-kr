@@ -1,6 +1,7 @@
 """
 KR Market OS — Telegram 발행기
 Bot API sendMessage 기반 국장 프리 채널 발행
+parse_mode 미사용 — 이모지/특수문자 포함 텍스트의 400 에러 방지
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import requests
 from config.settings import TG_BASE_URL, TG_TIMEOUT_SEC
 from utils.retry import with_retry
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 def publish_message(text: str, dry_run: bool = False) -> bool:
     """
     국장 프리 채널에 메시지 발행 (3회 재시도 / 2초 간격).
+    parse_mode 미사용 — HTML 예약문자 포함 시 400 에러 방지.
     반환: 성공 True / 실패 False
     dry_run=True 이면 발행 없이 로그만 출력.
     """
@@ -39,8 +41,9 @@ def publish_message(text: str, dry_run: bool = False) -> bool:
     payload = {
         "chat_id": channel_id,
         "text": text,
-        "parse_mode": "HTML",
         "disable_web_page_preview": True,
+        # parse_mode 미설정 — 일반 텍스트 발행
+        # 이모지, 화살표(→), 특수문자 포함 시 HTML 파싱 오류 방지
     }
 
     def _do_send() -> dict:

@@ -2,7 +2,7 @@
 KR Market OS — Yahoo Finance 수집기
 KOSPI, KOSDAQ, 삼성전자, SK하이닉스, KRW/USD 환율 + 섹터 대표 종목 수집
 주의: ^KS11, ^KQ11은 KST 기준 → ET 기준 실행 시 전일 종가 수집됨 (정상 동작)
-fast_info.last_price 방식은 period=1y download 의존으로 불안정 → history(period='5d') 사용
+User-Agent 설정 Session 사용 — 빈 JSON 응답(봇 차단) 방어
 """
 
 from __future__ import annotations
@@ -10,12 +10,27 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+import requests
 import yfinance as yf
 
 from config.settings import SECTOR_ALL_TICKERS, YAHOO_TICKERS
 from utils.retry import with_retry
 
-VERSION = "1.3.0"
+VERSION = "1.5.0"
+
+logger = logging.getLogger(__name__)
+
+# Yahoo Finance 봇 차단 방어용 커스텀 세션 (모듈 수준 1회 생성)
+_YF_SESSION = requests.Session()
+_YF_SESSION.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
+})
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +92,36 @@ def collect_sector_data() -> dict[str, float | None]:
 def _fetch_ticker(symbol: str) -> dict | None:
     """
     단일 티커 수집 (3회 재시도 / 2초 간격).
-    history(period='5d') 사용 — fast_info.last_price보다 안정적.
+    yf.download() 사용 — history()보다 안정적 (빈 JSON 응답 방어).
+    period='1mo' → 최근 거래일 기준 종가/전일종가 추출.
     반환: {"price": float, "chg_pct": float} 또는 None
     """
 
     def _do_fetch() -> dict:
-        hist = yf.Ticker(symbol).history(period="5d")
-        if hist is None or hist.empty:
+        df = yf.download(
+            symbol,
+            period="1mo",
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+            session=_YF_SESSION,
+        )
+        if df is None or df.empty:
             raise ValueError(f"{symbol} 데이터 없음")
 
-        price = _safe_float(hist["Close"].iloc[-1])
+        # yfinance 0.2.x: 단일 티커도 MultiIndex 컬럼 반환할 수 있음 → 평탄화
+        if isinstance(df.columns, __import__("pandas").MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        close = df["Close"].dropna()
+        if close.empty:
+            raise ValueError(f"{symbol} 종가 없음")
+
+        price = _safe_float(close.iloc[-1])
         if price is None:
             raise ValueError(f"{symbol} 종가 파싱 실패")
 
-        prev_close = _safe_float(hist["Close"].iloc[-2]) if len(hist) >= 2 else None
+        prev_close = _safe_float(close.iloc[-2]) if len(close) >= 2 else None
         chg_pct = None
         if prev_close and prev_close != 0:
             chg_pct = round((price - prev_close) / prev_close * 100, 4)
