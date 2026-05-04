@@ -10,7 +10,12 @@ import hashlib
 import logging
 from datetime import date, datetime
 
-from config.settings import MAX_TWEET_LENGTH
+from config.settings import (
+    KR_ALLOCATION_RATIO,
+    MAX_TWEET_LENGTH,
+    THREAD_FRAMEWORK_LABEL,
+    US_ALLOCATION_RATIO,
+)
 
 VERSION = "1.1.0"
 
@@ -260,6 +265,7 @@ def _format_signal_tweet(signal_result: dict, hashtags: str) -> str:
 
     lines = [
         f"{emoji} 국장 환경: {sig}",
+        f"🧩 운용 프레임: {THREAD_FRAMEWORK_LABEL} (미장 {US_ALLOCATION_RATIO} : 국장 {KR_ALLOCATION_RATIO})",
         "",
         FOREIGN_PRESSURE_TEXT.get(fp, "--"),
         RATE_BURDEN_TEXT.get(rb, "--"),
