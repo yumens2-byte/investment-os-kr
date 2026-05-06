@@ -1,6 +1,25 @@
+# ────────────────────────────────────────────────────────
+# KR Market OS — Python Dependencies (v1.4.0, 2026-05-05)
+# ────────────────────────────────────────────────────────
+# 변경: google-genai 추가 (Track C — Gemini AI 톤 보정)
+# 기존 6개 의존성은 유지 (버전 변경 없음)
+
+# 데이터 수집
 fredapi>=0.5.0
 yfinance>=0.2.40
+
+# X (Twitter) 발행
 tweepy>=4.14.0
+
+# 데이터베이스 — Supabase
 supabase>=2.0.0
+
+# HTTP (텔레그램 Bot API 포함)
 requests>=2.31.0
+
+# 환경 설정
 python-dotenv>=1.0.0
+
+# Gemini AI 톤 보정 (Track C 신규, 2026-05-05)
+# 4키 chain 자동 전환 (Main → Sub → Sub2 → Pay)
+google-genai>=1.0.0
