@@ -20,6 +20,7 @@ requests>=2.31.0
 # 환경 설정
 python-dotenv>=1.0.0
 
+
 # Gemini AI 톤 보정 (Track C 신규, 2026-05-05)
 # 4키 chain 자동 전환 (Main → Sub → Sub2 → Pay)
 google-genai>=1.0.0
