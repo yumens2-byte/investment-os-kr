@@ -1,17 +1,77 @@
 name: KR Market Daily
 
+# ──────────────────────────────────────────────────────────────
+# v1.4.0 변경사항 (2026-05-05)
+# ──────────────────────────────────────────────────────────────
+# - cron 정정: KST 평일 08:30 (UTC 23:30 월~금)
+#   * 미장 종가 직후 + 국장 장전 30분 전
+#   * 미국 휴장 다음 날에는 run_market.py 내부 Step 0에서 자동 스킵
+# - workflow_dispatch 입력 추가: dry_run, force_run
+# - test job 추가 (pytest 통과 시에만 deploy)
+# - GEMINI_API_KEY 계열 4키 환경변수 노출 (AI 톤 보정)
+# - DRY_RUN 시 logs/dryrun_*.json artifact 업로드 (운영자 검토용)
+# ──────────────────────────────────────────────────────────────
+
 on:
   schedule:
-    - cron: "30 20 * * 1-5"   # KST 09:33 월~금 (UTC 전날 22:33)
+    # KST 평일 08:30 = UTC 23:30 (월~금)
+    # 미국 휴장 다음 날에는 코드 내부에서 자동 스킵
+    - cron: "30 23 * * 1-5"
+
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "DRY RUN (발행 없이 수집/분석만)"
+        description: "DRY RUN (발행 없이 트윗 생성 + 리포트만)"
         type: boolean
         default: false
+      force_run:
+        description: "FORCE RUN (휴장일/주말 우회)"
+        type: boolean
+        default: false
+      use_ai_tone:
+        description: "USE AI TONE (Gemini 톤 보정)"
+        type: boolean
+        default: true
+
+# 동시 실행 방지 (수동 dispatch + cron 충돌 방지)
+concurrency:
+  group: kr-market-daily
+  cancel-in-progress: false
 
 jobs:
+  # ─────────────────────────────────────────
+  # Job 1: 테스트 게이트 (pytest 통과해야 deploy 진입)
+  # ─────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run pytest
+        run: pytest -q tests/
+
+  # ─────────────────────────────────────────
+  # Job 2: 메인 파이프라인 실행
+  # ─────────────────────────────────────────
   kr_daily:
+    name: KR Market Pipeline
+    needs: test  # ← test 통과해야 진입
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -23,30 +83,60 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # - name: Anti-bot random delay
-      #   run: |
-      #     DELAY=$((RANDOM % 500))
-      #     echo "⏱️ Random delay: ${DELAY}s ($((DELAY/60))m $((DELAY%60))s)"
-      #     sleep $DELAY    
-          
       - name: Run KR Market Pipeline
         env:
+          # 외부 API 키
           FRED_API_KEY:                ${{ secrets.FRED_API_KEY }}
+
+          # X (Twitter) 인증
           X_API_KEY:                   ${{ secrets.X_API_KEY }}
           X_API_SECRET:                ${{ secrets.X_API_SECRET }}
           X_ACCESS_TOKEN:              ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET:       ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+
+          # Telegram (KR 전용 채널)
           TELEGRAM_BOT_TOKEN:          ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_KR_FREE_CHANNEL_ID: ${{ secrets.TELEGRAM_KR_FREE_CHANNEL_ID }}
+
+          # Supabase
           SUPABASE_URL:                ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:                ${{ secrets.SUPABASE_KEY }}
-          DRY_RUN:                     ${{ inputs.dry_run || 'false' }}
 
-      
+          # Gemini 4키 chain (Main → Sub → Sub2 → Pay)
+          # 무료 키가 등록되어 있으면 우선 사용, 전부 실패 시 유료 키 fallback
+          GEMINI_API_KEY:              ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_SUB_KEY:          ${{ secrets.GEMINI_API_SUB_KEY }}
+          GEMINI_API_SUB_SUB_KEY:      ${{ secrets.GEMINI_API_SUB_SUB_KEY }}
+          GEMINI_API_SUB_PAY_KEY:      ${{ secrets.GEMINI_API_SUB_PAY_KEY }}
+
+          # 운영 제어 변수 (workflow_dispatch input 우선, 기본값 fallback)
+          DRY_RUN:                     ${{ inputs.dry_run || 'false' }}
+          FORCE_RUN:                   ${{ inputs.force_run || 'false' }}
+          USE_AI_TONE:                 ${{ inputs.use_ai_tone || 'true' }}
+
         run: python run_market.py
+
+      # DRY_RUN 모드일 때 logs/dryrun_*.json artifact 업로드
+      - name: Upload DRY_RUN report
+        if: ${{ inputs.dry_run == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dryrun-report-${{ github.run_id }}
+          path: logs/dryrun_*.json
+          retention-days: 7
+
+      # 실 발행 모드의 로그도 7일 보관
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-logs-${{ github.run_id }}
+          path: logs/kr_market_*.log
+          retention-days: 7
