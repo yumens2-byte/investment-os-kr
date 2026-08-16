@@ -108,6 +108,7 @@ jobs:
           DAILY_BUDGET_KRW:       ${{ vars.DAILY_BUDGET_KRW }}
           X_READ_COST_KRW:        ${{ vars.X_READ_COST_KRW }}
           X_WRITE_COST_KRW:       ${{ vars.X_WRITE_COST_KRW }}
+          X_MY_USER_ID:           ${{ vars.X_MY_USER_ID }}
 
         run: python run_reply.py
 
