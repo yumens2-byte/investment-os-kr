@@ -1,4 +1,31 @@
-# KR Market OS — 라이트 OS 고도화 v1.4.0
+# investment-os-kr — X Reply Engine v1.0.3
+
+**전환일**: 2026-08-17 | **현재 역할**: 내 X 게시글 댓글 자동 호응 답글 파이프라인 (`run_reply.py`)
+**이전 역할**: KR Market 일일 브리핑 (kr_daily — cron 비활성, workflow_dispatch로만 수동 실행 가능)
+
+## 🔍 점검(파일럿 테스트) 체계 매핑
+
+> 본 레포는 investment-os의 `pilot_test.py` 방식 대신 **pytest 게이트 job 방식**을 표준으로 사용한다.
+> 형태만 다를 뿐 배포 전 전수 점검 역할은 동일하며, **매 실행(스케줄 포함)마다 강제**된다.
+
+| 계층 | 위치 | 역할 |
+|---|---|---|
+| 실행 전 게이트 | `reply_engine.yml` Job `test` (`pytest -q tests/`) → `reply` job은 `needs: test` | 전수 테스트 실패 시 X 호출 자체 차단 (investment-os pilot_test job 대응) |
+| 파일럿 E2E | `tests/test_reply_pipeline.py`, `tests/test_reply_scenarios.py` | 외부 API 전량 목킹, dry_run/shadow/live 3모드 전 경로 + 중복·상한·예산·발행실패 시나리오 (investment-os `pilot_test.py` 대응) |
+| 품질 회귀 | `tests/test_reply_quality.py`, `tests/test_reply_hardening.py` | 실사고 재현 회귀 (지시형 답글 GATE_IMPERATIVE, 단가 오설정 경고) |
+| 단위 | `tests/test_reply_config_gate_budget.py`, `tests/test_reply_filter_classify_generate.py`, `tests/test_reply_store.py` | 모듈별 경계값 |
+| 진입점 스모크 | `tests/test_ci_smoke.py` | 레거시 run_market 진입점 회귀 감지 |
+| 실환경 검증 | REPLY_MODE 3단계 (dry_run → shadow → live) + 리포트 `review` 배열 | 코드가 아닌 실데이터/설정 문제 검출 (artifact 검수) |
+
+**전수 테스트 표준 명령** (지침 11):
+```bash
+ruff check . --line-length=100   # 신규 코드(reply_engine/, run_reply.py, tests/test_reply_*) 0건 유지
+pytest -q tests/                 # 전수 PASS 필수
+```
+
+---
+
+# (이하 레거시 문서) KR Market OS — 라이트 OS 고도화 v1.4.0
 
 **작업일**: 2026-05-05  
 **작업 범위**: investment-os-kr (라이트 OS) 3가지 기능 추가  
