@@ -1,0 +1,123 @@
+name: X Reply Engine
+
+# ──────────────────────────────────────────────────────────────
+# v1.0.0 (2026-08-17)
+# ──────────────────────────────────────────────────────────────
+# 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
+#
+# [제어 — GitHub Variables]
+#   REPLY_ENABLED    : 'true'가 아니면 코드가 즉시 종료 (긴급 정지, HG-3)
+#   REPLY_MODE       : dry_run | shadow | live (단계 전환은 마스터 수동, HG-1)
+#   DAILY_BUDGET_KRW : 일일 비용 상한 (기본 1000)
+#   X_READ_COST_KRW / X_WRITE_COST_KRW : 호출 단가 (미설정 시 count 모드 fallback)
+#
+# [모드 우선순위] dispatch input > vars.REPLY_MODE > 'dry_run' (schedule 안전 기본값)
+# [cron] KST 10:17 / 13:17 / 18:17 / 22:17 — 비정각 오프셋 (안티봇 + Actions 정각 skip 방지)
+# ──────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: "17 1,4,9,13 * * *"
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "실행 모드 (미지정 시 vars.REPLY_MODE)"
+        type: choice
+        options: [dry_run, shadow, live]
+        default: dry_run
+
+# L3 가드: cron + dispatch 동시 실행 차단 (중복 답글 방지)
+concurrency:
+  group: reply-engine
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────
+  # Job 1: 테스트 게이트
+  # ─────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run pytest
+        run: pytest -q tests/
+
+  # ─────────────────────────────────────────
+  # Job 2: Reply 파이프라인
+  # ─────────────────────────────────────────
+  reply:
+    name: Reply Pipeline
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15   # 시작 지터(최대 5분) + 발행 간 지터 감안
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Reply Engine
+        env:
+          # X (Twitter) OAuth 1.0a
+          X_API_KEY:              ${{ secrets.X_API_KEY }}
+          X_API_SECRET:           ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:         ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET:  ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+
+          # Supabase
+          SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
+
+          # Gemini 4키 chain (Main → Sub → Sub2 → Pay)
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_SUB_KEY:     ${{ secrets.GEMINI_API_SUB_KEY }}
+          GEMINI_API_SUB_SUB_KEY: ${{ secrets.GEMINI_API_SUB_SUB_KEY }}
+          GEMINI_API_SUB_PAY_KEY: ${{ secrets.GEMINI_API_SUB_PAY_KEY }}
+
+          # 운영 제어 (GitHub Variables — HG-1/HG-3)
+          REPLY_ENABLED:          ${{ vars.REPLY_ENABLED }}
+          REPLY_MODE:             ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
+          DAILY_BUDGET_KRW:       ${{ vars.DAILY_BUDGET_KRW }}
+          X_READ_COST_KRW:        ${{ vars.X_READ_COST_KRW }}
+          X_WRITE_COST_KRW:       ${{ vars.X_WRITE_COST_KRW }}
+
+        run: python run_reply.py
+
+      # 실행 리포트 artifact (모드 무관 — shadow/live 검수용, HG-2/HG-4)
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reply-report-${{ github.run_id }}
+          path: |
+            logs/reply_report_*.json
+            logs/reply_*.log
+          retention-days: 14
