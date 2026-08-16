@@ -45,7 +45,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -97,6 +97,7 @@ def main() -> dict:
         "candidates": 0,
         "published": 0,
         "skip_reasons": {},
+        "review": [],   # C-3: 건별 품질 검수 배열 (댓글/라벨/답글/결과)
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -263,18 +264,30 @@ def main() -> dict:
             "mode": mode,
         }
 
+        review_entry = {
+            "reply_tweet_id": tweet_id,
+            "comment_preview": tweet["text"][:100],
+            "label": tweet["label"],
+            "reply_text": reply_text,
+            "result": None,
+        }
+        summary["review"].append(review_entry)
+
         if db_write_allowed:
             if not store.insert_history(record):
                 # INSERT 실패(PK 충돌 포함) → 발행 금지 (L1 최종 방어)
+                review_entry["result"] = "HISTORY_INSERT_FAIL"
                 _skip(tweet_id, "HISTORY_INSERT_FAIL")
                 continue
 
         if skip_reason:
+            review_entry["result"] = skip_reason
             _skip(tweet_id, skip_reason)
             continue
 
         if mode != "live":
             logger.info(f"[{mode.upper()}] 발행 시뮬레이션: '{reply_text}' → {tweet_id}")
+            review_entry["result"] = "SIMULATED"
             recent_texts.append(reply_text)
             published_this_run += 1
             continue
@@ -285,10 +298,12 @@ def main() -> dict:
 
         if response_tweet_id:
             store.mark_responded(tweet_id, response_tweet_id)
+            review_entry["result"] = "PUBLISHED"
             recent_texts.append(reply_text)
             published_this_run += 1
         else:
             store.update_skip_reason(tweet_id, "PUBLISH_FAIL")  # 사유 사후 기록 (R-2)
+            review_entry["result"] = "PUBLISH_FAIL"
             _skip(tweet_id, "PUBLISH_FAIL")
 
         # 발행 간 지터 (마지막 건 제외)

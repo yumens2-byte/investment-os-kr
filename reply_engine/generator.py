@@ -19,7 +19,7 @@ import logging
 from core.gemini_gateway import call as gemini_call
 from reply_engine.config import REPLY_MAX_LENGTH
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +71,13 @@ def generate_batch(items: list[dict]) -> dict[str, str]:
         "당신은 한국 투자 정보 X 계정 운영자다. 아래 각 댓글에 대한 답글을 작성하라.\n"
         "규칙:\n"
         f"1. 공백 포함 {REPLY_MAX_LENGTH}자 이내, 한 문장\n"
-        "2. 감사 또는 공감/호응만 표현 (투자 조언·전망·질문 금지)\n"
-        "3. 자연스러운 한국어 존댓말, 사람이 쓴 것처럼\n"
-        "4. 해시태그·링크·자기소개 금지, 이모지는 최대 1개 (없어도 됨)\n"
-        "5. 답글끼리 표현이 겹치지 않게 각각 다르게\n\n"
+        "2. 오직 감사 또는 공감·호응 표현만 허용\n"
+        "3. 절대 금지: 질문에 대한 답변, 정보 제공, 행동 안내·권유·지시"
+        "(예: '확인해 보세요', '~하세요', '~해 주세요' 류), 투자 조언·전망\n"
+        "4. 댓글이 질문이어도 답하지 말고 관심에 대한 감사만 표현\n"
+        "5. 자연스러운 한국어 존댓말, 사람이 쓴 것처럼\n"
+        "6. 해시태그·링크·자기소개 금지, 이모지는 최대 1개 (없어도 됨)\n"
+        "7. 답글끼리 표현이 겹치지 않게 각각 다르게\n\n"
         f"{prompt_items}\n\n"
         'JSON 배열로만 응답: [{"id": "...", "reply": "..."}]'
     )
