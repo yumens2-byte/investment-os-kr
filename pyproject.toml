@@ -5,7 +5,7 @@ line-length = 100
 select = ["E", "F", "I", "UP"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["collectors", "engines", "publishers", "db", "config", "utils"]
+known-first-party = ["collectors", "core", "engines", "publishers", "db", "config", "utils", "reply_engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

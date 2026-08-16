@@ -11,11 +11,13 @@ from __future__ import annotations
 import run_market
 
 
-
 def test_main_dry_run_smoke(monkeypatch):
     """run_market.main()이 DRY_RUN에서 예외 없이 종료되어야 한다."""
 
     monkeypatch.setenv("DRY_RUN", "true")
+    # FIX(2026-08-17): Step 0 휴장 체크가 실제 실행 날짜에 의존 → 월요일/휴장 익일 FAIL.
+    # FORCE_RUN으로 날짜 의존성 제거 (스모크 목적은 진입점 회귀 감지이므로 우회가 타당).
+    monkeypatch.setenv("FORCE_RUN", "true")
 
     monkeypatch.setattr(
         run_market,
@@ -48,7 +50,9 @@ def test_main_dry_run_smoke(monkeypatch):
             "collected_at": "2026-05-04T00:00:00Z",
         },
     )
-    monkeypatch.setattr(run_market, "collect_sector_data", lambda: {"035420.KS": 1.2, "005490.KS": -0.4})
+    monkeypatch.setattr(
+        run_market, "collect_sector_data", lambda: {"035420.KS": 1.2, "005490.KS": -0.4}
+    )
 
     # DRY_RUN에서 호출되면 안 되는 경로(보호 장치)
     monkeypatch.setattr(run_market, "publish_thread", lambda *args, **kwargs: [])
