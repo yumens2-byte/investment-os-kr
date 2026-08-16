@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
@@ -108,3 +108,12 @@ def get_cost_per_call() -> tuple[float | None, float | None]:
         return value if value >= 0 else None
 
     return _parse("X_READ_COST_KRW"), _parse("X_WRITE_COST_KRW")
+
+
+def get_my_user_id() -> str:
+    """
+    X_MY_USER_ID 변수 (선택). 설정 시 get_me 호출 생략 (읽기 1콜 절약).
+    숫자 문자열만 유효 — 그 외는 미설정 취급.
+    """
+    raw = os.environ.get("X_MY_USER_ID", "").strip()
+    return raw if raw.isdigit() else ""

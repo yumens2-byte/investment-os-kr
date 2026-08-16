@@ -41,10 +41,11 @@ from reply_engine.config import (
     REPLY_RECENT_COMPARE_COUNT,
     STARTUP_JITTER_MAX_SEC,
     get_mode,
+    get_my_user_id,
     is_enabled,
 )
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -65,8 +66,12 @@ def _setup_logging() -> None:
     )
 
 
-def _write_report(summary: dict) -> None:
-    """실행 요약 JSON 리포트 (artifact 업로드 대상) — 실패해도 파이프라인 무영향."""
+def _write_report(summary: dict, guard=None) -> None:
+    """실행 요약 JSON 리포트 (artifact 업로드 대상) — 실패해도 파이프라인 무영향.
+    guard 전달 시 예산 스냅샷 포함 (B-3).
+    """
+    if guard is not None:
+        summary["budget"] = guard.snapshot()
     try:
         log_dir = Path("logs")
         log_dir.mkdir(exist_ok=True)
@@ -118,35 +123,38 @@ def main() -> dict:
     guard = budget_mod.BudgetGuard(store.get_budget(today))
     if not guard.can_read():
         summary["exit_reason"] = "EXIT_BUDGET"
-        _write_report(summary)
+        _write_report(summary, guard)
         return summary
 
     # ── Step 2: 수집 ──────────────────────────────────────────
     client = x_client.get_x_client()
     if client is None:
         summary["exit_reason"] = "EXIT_NO_CREDENTIALS"
-        _write_report(summary)
+        _write_report(summary, guard)
         return summary
 
     cursor = store.get_cursor(_ACCOUNT)
-    my_user_id = (cursor or {}).get("my_user_id") or ""
+    # user_id 우선순위 (B-1): X_MY_USER_ID 변수 > 커서 캐시 > get_me (읽기 1콜)
+    my_user_id = get_my_user_id() or (cursor or {}).get("my_user_id") or ""
     since_id = (cursor or {}).get("since_id") or None
 
-    if not my_user_id:
+    if my_user_id:
+        logger.info(f"[Step2] user_id 확보 (get_me 생략): {my_user_id}")
+    else:
         my_user_id = x_client.fetch_my_user_id(client) or ""
         guard.record_read()
         if not my_user_id:
             summary["exit_reason"] = "EXIT_GET_ME_FAIL"
             if db_write_allowed:
                 store.upsert_budget(guard.row)  # 읽기 1콜 소모분 기록
-            _write_report(summary)
+            _write_report(summary, guard)
             return summary
         # get_me가 읽기 1콜을 소모했으므로 fetch 전 예산 재확인 (R-1)
         if not guard.can_read():
             summary["exit_reason"] = "EXIT_BUDGET"
             if db_write_allowed:
                 store.upsert_budget(guard.row)
-            _write_report(summary)
+            _write_report(summary, guard)
             return summary
 
     fetched = x_client.fetch_mentions(client, my_user_id, since_id)
@@ -155,7 +163,7 @@ def main() -> dict:
         summary["exit_reason"] = "EXIT_FETCH_FAIL"
         if db_write_allowed:
             store.upsert_budget(guard.row)
-        _write_report(summary)
+        _write_report(summary, guard)
         return summary
 
     tweets = fetched["tweets"]
@@ -172,7 +180,7 @@ def main() -> dict:
         summary["exit_reason"] = "EXIT_NO_MENTIONS"
         if db_write_allowed:
             store.upsert_budget(guard.row)
-        _write_report(summary)
+        _write_report(summary, guard)
         return summary
 
     # ── Step 3: 필터 ──────────────────────────────────────────
@@ -299,7 +307,7 @@ def main() -> dict:
         f"[ReplyEngine] 완료 | 수집={summary['collected']} 후보={summary['candidates']} "
         f"발행={published_this_run} skip={summary['skip_reasons']}"
     )
-    _write_report(summary)
+    _write_report(summary, guard)
     return summary
 
 
