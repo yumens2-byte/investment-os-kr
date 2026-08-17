@@ -226,7 +226,7 @@ def test_pilot_live_full_path(monkeypatch):
     assert result["skip_reasons"]["OUT_OF_SCOPE"] == 1
     assert result["skip_reasons"]["SPAM_LINK"] == 1
     assert mem.cursor_saved == [("kr_main", "102", "111")]   # 커서 전진
-    assert len(mem.budget_saved) == 1                        # 예산 저장
+    assert len(mem.budget_saved) == 2                        # 발행 직후 1 + 종료 1 (V-1)
 
 
 def test_pilot_dry_run_no_db_no_publish(monkeypatch):

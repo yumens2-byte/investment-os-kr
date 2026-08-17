@@ -37,6 +37,7 @@ from reply_engine import filter as filter_mod
 from reply_engine.config import (
     PUBLISH_JITTER_MAX_SEC,
     PUBLISH_JITTER_MIN_SEC,
+    PUBLISH_START_DELAY_MAX_SEC,
     REPLY_DAILY_CAP,
     REPLY_RECENT_COMPARE_COUNT,
     STARTUP_JITTER_MAX_SEC,
@@ -45,7 +46,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -232,6 +233,7 @@ def main() -> dict:
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
     responded_today = store.count_responded_today()
     published_this_run = 0
+    first_publish_delayed = False   # 첫 발행 직전 1회 랜덤 딜레이 (안티봇, 2026-08-17)
 
     for idx, tweet in enumerate(pass_items):
         tweet_id = tweet["id"]
@@ -292,9 +294,18 @@ def main() -> dict:
             published_this_run += 1
             continue
 
+        # live: 첫 발행 직전 랜덤 딜레이 0~PUBLISH_START_DELAY_MAX_SEC (안티봇)
+        # 발행 대상이 실제로 확정된 시점에만 대기 — 전량 스킵 실행에서는 대기 없음
+        if not first_publish_delayed:
+            first_publish_delayed = True
+            delay = random.randint(0, PUBLISH_START_DELAY_MAX_SEC)
+            logger.info(f"[Step7] 첫 발행 랜덤 딜레이 {delay}초 대기 (안티봇)")
+            time.sleep(delay)
+
         # live: 발행 → 즉시 기록 (발행-기록 짝)
         response_tweet_id = x_client.post_reply(client, reply_text, tweet_id)
         guard.record_write()
+        store.upsert_budget(guard.row)  # V-1: 발행마다 즉시 저장 (timeout 킬 시 집계 유실 방지)
 
         if response_tweet_id:
             store.mark_responded(tweet_id, response_tweet_id)

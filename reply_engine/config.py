@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
@@ -36,6 +36,10 @@ PUBLISH_JITTER_MAX_SEC: int = 180
 
 # 실행 시작 지터 (초) — live 모드 전용
 STARTUP_JITTER_MAX_SEC: int = 300
+
+# 발행 직전 랜덤 딜레이 상한 (초) — live 모드 전용, 첫 발행 직전 1회 적용 (안티봇)
+# cron 시각 + 처리시간으로 발행 시각이 고정 패턴화되는 것을 방지 (마스터 지시 2026-08-17)
+PUBLISH_START_DELAY_MAX_SEC: int = int(os.environ.get("REPLY_PUBLISH_DELAY_MAX_SEC", "600"))
 
 # ---------------------------------------------------------------------------
 # 수집 설정
