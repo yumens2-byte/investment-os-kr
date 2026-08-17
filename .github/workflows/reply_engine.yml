@@ -67,7 +67,7 @@ jobs:
     name: Reply Pipeline
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 15   # 시작 지터(최대 5분) + 발행 간 지터 감안
+    timeout-minutes: 40   # 시작 지터 5분 + 발행 딜레이 최대 10분 + 발행 간 지터(180s×7) 최악 36분 감안
 
     steps:
       - name: Checkout
