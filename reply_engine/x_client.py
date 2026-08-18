@@ -24,7 +24,7 @@ import tweepy
 
 from reply_engine.config import MENTIONS_MAX_RESULTS
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -148,3 +148,36 @@ def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> s
     except Exception as exc:
         logger.error(f"[XClient] 답글 발행 실패 (재시도 없음): {exc}")
         return None
+
+
+def fetch_conversation_roots(
+    client: tweepy.Client,
+    conversation_ids: list[str],
+) -> dict[str, str] | None:
+    """
+    대화 루트 트윗들의 author_id 배치 조회 (P-1 스코프 검증, 1콜).
+
+    conversation_id == 루트 트윗 ID 이므로 GET /2/tweets?ids=... 로 소유자 확인 가능.
+    tweepy 4.17.0 확인: get_tweets(self, ids, *, user_auth=False, **params)
+
+    반환:
+      {conversation_id: root_author_id} — 조회된 것만 포함 (삭제/보호계정은 누락됨)
+      None — API 호출 자체 실패 (호출부에서 전량 보수적 스킵 처리)
+    """
+    ids = [str(i) for i in dict.fromkeys(conversation_ids) if i]
+    if not ids:
+        return {}
+
+    try:
+        resp = client.get_tweets(ids=ids, user_auth=True, tweet_fields=["author_id"])
+    except Exception as exc:
+        logger.error(f"[XClient] 대화 루트 조회 실패: {exc}")
+        return None
+
+    roots: dict[str, str] = {}
+    if resp and resp.data:
+        for t in resp.data:
+            roots[str(t.id)] = str(t.author_id) if t.author_id else ""
+
+    logger.info(f"[XClient] 대화 루트 조회 {len(ids)}건 요청 → {len(roots)}건 확인")
+    return roots

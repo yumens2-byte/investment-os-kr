@@ -97,6 +97,9 @@ def test_v1_budget_saved_per_write(monkeypatch):
     ]
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
     monkeypatch.setattr(
+        x_client, "fetch_conversation_roots", lambda _c, ids: {i: "111" for i in ids}
+    )
+    monkeypatch.setattr(
         x_client, "fetch_mentions",
         lambda _c, _u, _s: {"success": True, "tweets": two_pass, "users": {},
                             "newest_id": "401", "error": None},
@@ -124,5 +127,5 @@ def test_v1_budget_saved_per_write(monkeypatch):
 
 def test_versions_bumped_d_series():
     """D-1/V-1 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.0.4"
-    assert config.VERSION == "1.0.2"
+    assert run_reply.VERSION == "1.1.0"
+    assert config.VERSION == "1.0.3"

@@ -77,6 +77,9 @@ def test_s04_pipeline_no_mentions_exit_ok(monkeypatch):
     mem.install(monkeypatch)
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
     monkeypatch.setattr(
+        x_client, "fetch_conversation_roots", lambda _c, ids: {i: "111" for i in ids}
+    )
+    monkeypatch.setattr(
         x_client, "fetch_mentions",
         lambda _c, _u, _s: {"success": True, "tweets": [], "users": {},
                             "newest_id": None, "error": None},
@@ -106,6 +109,9 @@ def test_s05_partial_daily_cap(monkeypatch):
          "conversation_id": "c2", "in_reply_to_user_id": "111", "created_at": now},
     ]
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
+    monkeypatch.setattr(
+        x_client, "fetch_conversation_roots", lambda _c, ids: {i: "111" for i in ids}
+    )
     monkeypatch.setattr(
         x_client, "fetch_mentions",
         lambda _c, _u, _s: {"success": True, "tweets": two_pass, "users": {},
@@ -150,6 +156,9 @@ def test_s06_within_batch_similarity(monkeypatch):
     ]
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
     monkeypatch.setattr(
+        x_client, "fetch_conversation_roots", lambda _c, ids: {i: "111" for i in ids}
+    )
+    monkeypatch.setattr(
         x_client, "fetch_mentions",
         lambda _c, _u, _s: {"success": True, "tweets": two_pass, "users": {},
                             "newest_id": "301", "error": None},
@@ -187,10 +196,13 @@ def test_s07_budget_recheck_after_get_me(monkeypatch):
     mem.install(monkeypatch)
     monkeypatch.setattr(
         store, "get_budget",
-        lambda d: {"budget_date": d, "read_calls": 7, "write_calls": 0,
-                   "gemini_calls": 0, "est_cost_krw": 0.0},  # count 모드 8 중 7 소진
+        lambda d: {"budget_date": d, "read_calls": 9, "write_calls": 0,
+                   "gemini_calls": 0, "est_cost_krw": 0.0},  # count 모드 10 중 9 소진
     )
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
+    monkeypatch.setattr(
+        x_client, "fetch_conversation_roots", lambda _c, ids: {i: "111" for i in ids}
+    )
     monkeypatch.setattr(x_client, "fetch_my_user_id", lambda _c: "111")
 
     def _must_not_fetch(*_a, **_k):
@@ -201,7 +213,7 @@ def test_s07_budget_recheck_after_get_me(monkeypatch):
     result = run_reply.main()
     assert result["exit_reason"] == "EXIT_BUDGET"
     assert len(mem.budget_saved) == 1
-    assert mem.budget_saved[0]["read_calls"] == 8  # get_me 소모분 기록
+    assert mem.budget_saved[0]["read_calls"] == 10  # get_me 소모분 기록
 
 
 def test_s12_get_me_fail_saves_budget(monkeypatch):
@@ -211,6 +223,9 @@ def test_s12_get_me_fail_saves_budget(monkeypatch):
     mem.cursor = None
     mem.install(monkeypatch)
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
+    monkeypatch.setattr(
+        x_client, "fetch_conversation_roots", lambda _c, ids: {i: "111" for i in ids}
+    )
     monkeypatch.setattr(x_client, "fetch_my_user_id", lambda _c: None)
 
     result = run_reply.main()
@@ -305,5 +320,5 @@ def test_s13_shadow_gate_fail_recorded(monkeypatch):
 
 def test_pipeline_versions_bumped():
     """R-1/R-2 + B 시리즈 보완 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.0.4"
+    assert run_reply.VERSION == "1.1.0"
     assert store.VERSION == "1.0.1"

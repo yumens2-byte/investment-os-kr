@@ -1,7 +1,8 @@
 """
 X Reply Engine — 메인 파이프라인 (v1.0.0)
 ==============================================
-내 게시글에 달린 댓글(멘션 타임라인) 수집 → 필터 → 분류 → 생성 → 게이트 → 답글 발행.
+내 게시글에 달린 댓글(멘션 타임라인) 수집 → 필터 → 루트검증 → 분류 → 생성 → 게이트 → 답글 발행.
+스코프: conversation root(원 게시글) 작성자가 내 계정인 스레드만 (P-1, 2026-08-18).
 
 [정책 요약]
 - 무응답이 기본값 (default-deny): POSITIVE / SUPPORTIVE_NEUTRAL만 답글
@@ -46,7 +47,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.0.4"
+VERSION = "1.1.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -201,8 +202,33 @@ def main() -> dict:
             continue
         candidates.append(tweet)
 
-    summary["candidates"] = len(candidates)
     logger.info(f"[Step3] 필터 통과 {len(candidates)}건")
+
+    # ── Step 3.5: 대화 루트 소유자 검증 (P-1, 2026-08-18) ────
+    # in_reply_to_user_id 조건만으로는 "내가 타인 글에 단 댓글의 대댓글"이 통과하므로,
+    # conversation root(=원 게시글) 작성자가 나인 경우만 응답 대상으로 확정한다.
+    if candidates:
+        conv_ids = list(dict.fromkeys(t["conversation_id"] for t in candidates))
+        roots: dict | None = None
+        if guard.can_read():
+            roots = x_client.fetch_conversation_roots(client, conv_ids)
+            guard.record_read()
+        else:
+            logger.warning("[Step3.5] 읽기 예산 부족 — 루트 미검증 후보 전량 보수적 스킵")
+
+        verified: list[dict] = []
+        for tweet in candidates:
+            root_author = (roots or {}).get(tweet["conversation_id"])
+            if roots is None or root_author is None:
+                _skip(tweet["id"], "THREAD_UNVERIFIED")   # 조회 실패/루트 삭제 → 보수적 스킵
+            elif root_author != my_user_id:
+                _skip(tweet["id"], "OUT_OF_SCOPE_THREAD")  # 타인 글 스레드 → 응답 금지
+            else:
+                verified.append(tweet)
+        candidates = verified
+        logger.info(f"[Step3.5] 루트 검증 통과 {len(candidates)}건")
+
+    summary["candidates"] = len(candidates)
 
     # ── Step 4: 분류 ──────────────────────────────────────────
     pass_items: list[dict] = []
@@ -244,7 +270,9 @@ def main() -> dict:
         if responded_today + published_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
         else:
-            gate_ok, gate_reason = gate.check_reply(reply_text, recent_texts)
+            gate_ok, gate_reason = gate.check_reply(
+                reply_text, recent_texts, comment_text=tweet["text"]
+            )
             if not gate_ok:
                 skip_reason = gate_reason
             elif mode == "live" and not guard.can_write():

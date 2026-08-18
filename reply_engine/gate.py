@@ -9,6 +9,8 @@ reply_engine/gate.py
   GATE_NON_KR       — 비허용 스크립트 (가나/한자/키릴/태국/아랍 등)
   GATE_BANNED_WORD  — 금지어 (투자 조언성 표현 — 생성 오작동 신호)
   GATE_IMPERATIVE   — 지시형/안내형 표현 (감사·호응만 정책 위반, C-2)
+  GATE_QUESTION     — 답글 내 물음표 (대화 유도 금지, P-2)
+  GATE_ECHO         — 원 댓글 미러링 (역할 반전 방지, P-2 — 2026-08-18 축하 사고)
   GATE_FORMAT       — 해시태그/링크/멘션 포함
   GATE_SIMILARITY   — 최근 발행분 또는 동일 배치 내 유사 (자카드, L6 — X 403 방지)
 """
@@ -24,7 +26,7 @@ from reply_engine.config import (
     REPLY_SIMILARITY_THRESHOLD,
 )
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,14 @@ _FORMAT_PATTERN = re.compile(r"#|https?://|t\.co/|@\w+", re.IGNORECASE)
 _IMPERATIVE_PATTERN = re.compile(
     r"(해\s?보세요|해\s?주세요|해\s?주시길|하세요|하십시오|바랍니다|해야\s?합니다)"
 )
+
+# P-2 (2026-08-18): 에코 게이트 정규화 — 멘션/비문자(이모지·구두점·공백) 제거 후 비교
+_ECHO_STRIP_PATTERN = re.compile(r"@\w+|[^0-9A-Za-z가-힣]")
+ECHO_SIMILARITY_THRESHOLD: float = 0.5
+
+
+def _normalize_for_echo(text: str) -> str:
+    return _ECHO_STRIP_PATTERN.sub("", text or "")
 
 
 def _char_bigrams(text: str) -> set[str]:
@@ -62,9 +72,14 @@ def jaccard_similarity(a: str, b: str) -> float:
     return len(set_a & set_b) / len(union)
 
 
-def check_reply(text: str, recent_texts: list[str]) -> tuple[bool, str | None]:
+def check_reply(
+    text: str,
+    recent_texts: list[str],
+    comment_text: str = "",
+) -> tuple[bool, str | None]:
     """
     단건 게이트. recent_texts에는 최근 발행분 + 동일 배치 내 선행 통과분을 함께 전달.
+    comment_text 전달 시 원 댓글 미러링(GATE_ECHO)까지 검증한다 (P-2).
     반환: (통과 여부, 실패 코드 | None)
     """
     if not text or not text.strip():
@@ -84,6 +99,18 @@ def check_reply(text: str, recent_texts: list[str]) -> tuple[bool, str | None]:
 
     if _IMPERATIVE_PATTERN.search(text):
         return False, "GATE_IMPERATIVE"
+
+    if "?" in text or "？" in text:
+        return False, "GATE_QUESTION"
+
+    if comment_text:
+        norm_reply = _normalize_for_echo(text)
+        norm_comment = _normalize_for_echo(comment_text)
+        if norm_reply and norm_comment:
+            echo = jaccard_similarity(norm_reply, norm_comment)
+            if echo >= ECHO_SIMILARITY_THRESHOLD:
+                logger.info(f"[Gate] 에코 탈락 ({echo:.2f}): '{text}' ≈ 댓글 '{comment_text}'")
+                return False, "GATE_ECHO"
 
     if _FORMAT_PATTERN.search(text):
         return False, "GATE_FORMAT"

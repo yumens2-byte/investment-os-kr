@@ -47,7 +47,8 @@ def test_b1_env_user_id_skips_get_me(monkeypatch):
 
     result = run_reply.main()
     assert result["success"] is True
-    # get_me 생략 → 읽기는 mentions 1콜만
+    # get_me 생략 → mentions 1콜만
+    # (픽스처 in_reply_to=111 ≠ env user_id → 후보 0건 → 루트검증 콜 없음)
     assert result["budget"]["read_calls"] == 1
 
 
@@ -150,6 +151,6 @@ def test_versions_bumped_b_series():
     """보완 반영 버전 확인 (지침 5)."""
     from reply_engine import budget as budget_mod
 
-    assert run_reply.VERSION == "1.0.4"
-    assert config.VERSION == "1.0.2"
+    assert run_reply.VERSION == "1.1.0"
+    assert config.VERSION == "1.0.3"
     assert budget_mod.VERSION == "1.0.1"

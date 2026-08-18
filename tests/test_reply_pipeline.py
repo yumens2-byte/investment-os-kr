@@ -169,6 +169,11 @@ def _install_x(monkeypatch, published: list, fetch_success=True):
         "post_reply",
         lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
     )
+    # P-1: 대화 루트 전부 내 계정(111) 소유로 목킹 (스코프 테스트는 별도 파일에서 수행)
+    monkeypatch.setattr(
+        x_client, "fetch_conversation_roots",
+        lambda _c, ids: {i: "111" for i in ids},
+    )
 
 
 def _quiet(monkeypatch):
