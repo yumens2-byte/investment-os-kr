@@ -408,7 +408,8 @@ def test_following_versions():
     assert run_following.VERSION == "1.0.0"
     assert config.VERSION == "1.0.1"   # H-1 (빈 env int 크래시) 수정 반영
     assert a.VERSION == "1.0.1"        # J-1 (응답 잘림) 수정 반영
-    for mod in (c, d, e, p, s):
+    assert p.VERSION == "1.0.1"        # K-1 (RT 유입 차단) 수정 반영
+    for mod in (c, d, e, s):
         assert mod.VERSION == "1.0.0"
 
 
@@ -510,3 +511,45 @@ def test_j1_version_bumped():
     from following_engine import analyzer as fan
 
     assert fan.VERSION == "1.0.1"
+
+
+# ---------------------------------------------------------------------------
+# K-1 (2026-08-20 실사고): RT 유입 — prefilter 이중 방어
+# ---------------------------------------------------------------------------
+
+def test_k1_retweet_blocked_static():
+    """실측 픽스처: 첫 QUOTE 후보가 됐던 RT 게시물이 이제 정적 필터에서 차단돼야 한다."""
+    from following_engine import prefilter
+
+    rt_tweet = {
+        "id": "2090559629071978926", "author_id": "999",
+        "text": "RT @ohmahahm: 🚨 BMO, 반도체주 5종목에 '시장수익률 상회' 의견으로 커버리지 개시 "
+                "마이크론 목표주가 상향 등 상세 내용",
+    }
+    ok, reason = prefilter.check_static(rt_tweet, "111", set())
+    assert not ok and reason == "SKIP_RETWEET"
+
+
+def test_k1_normal_and_quote_posts_pass():
+    """정상 글·인용 코멘트 글(RT @ 로 시작하지 않음)은 통과해야 한다."""
+    from following_engine import prefilter
+
+    for text in (
+        "BMO가 반도체주 5종목에 시장수익률 상회 의견으로 커버리지를 개시했습니다 상세 분석",
+        "오늘 나스닥 반도체 섹터 데이터 정리: 수요 강세와 공급 제약이 동시에 관찰됩니다",
+    ):
+        ok, reason = prefilter.check_static(
+            {"id": "1", "author_id": "999", "text": text}, "111", set()
+        )
+        assert ok, (text, reason)
+
+
+def test_k1_rt_checked_before_topic():
+    """RT는 topic 매칭 여부와 무관하게 우선 차단 (SELF 다음 순서)."""
+    from following_engine import prefilter
+
+    rt_text = "RT @x: 아무 주제나 상관없는 긴 텍스트입니다 반도체"
+    ok, reason = prefilter.check_static(
+        {"id": "1", "author_id": "999", "text": rt_text}, "111", set()
+    )
+    assert not ok and reason == "SKIP_RETWEET"
