@@ -1,0 +1,126 @@
+name: X Following Agent
+
+# ──────────────────────────────────────────────────────────────
+# v1.0.0 (2026-08-20)
+# ──────────────────────────────────────────────────────────────
+# 팔로잉 홈 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 생성 (run_following.py)
+#
+# [제어 — GitHub Variables]
+#   FOLLOWING_ENABLED        : 'true'가 아니면 코드가 즉시 종료 (초기 배포 false)
+#   FOLLOWING_EXECUTION_MODE : dry_run | shadow | live (미지 값 → dry_run 강등)
+#   LIVE 허용 액션은 QUOTE만 (자동 Reply 금지 — REVIEW_ONLY 후보로만 적재)
+#
+# [모드 우선순위] dispatch input > vars.FOLLOWING_EXECUTION_MODE > 'dry_run'
+# [cron] KST 09:23 / 19:23 — 일 2회, 비정각 (Q4 승인)
+# [예산] kr_reply_budget 공유 (reply engine과 합산 관리)
+# ──────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: "23 0,10 * * *"
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "실행 모드 (미지정 시 vars.FOLLOWING_EXECUTION_MODE)"
+        type: choice
+        options: [dry_run, shadow, live]
+        default: dry_run
+
+concurrency:
+  group: following-agent
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Run pytest
+        run: pytest -q tests/
+
+  following:
+    name: Following Agent
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # QUOTE 최대 2건 + 발행 간 지터 감안
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Following Agent
+        env:
+          # X (OAuth 1.0a) — 실사용 Secret만 주입 (최소권한)
+          X_API_KEY:              ${{ secrets.X_API_KEY }}
+          X_API_SECRET:           ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN:         ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET:  ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+
+          # Supabase
+          SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
+
+          # Gemini 4키 chain
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_SUB_KEY:     ${{ secrets.GEMINI_API_SUB_KEY }}
+          GEMINI_API_SUB_SUB_KEY: ${{ secrets.GEMINI_API_SUB_SUB_KEY }}
+          GEMINI_API_SUB_PAY_KEY: ${{ secrets.GEMINI_API_SUB_PAY_KEY }}
+
+          # 운영 제어 (GitHub Variables)
+          FOLLOWING_ENABLED:        ${{ vars.FOLLOWING_ENABLED }}
+          FOLLOWING_EXECUTION_MODE: ${{ inputs.mode || vars.FOLLOWING_EXECUTION_MODE || 'dry_run' }}
+          X_MY_USER_ID:             ${{ vars.X_MY_USER_ID }}
+          DAILY_BUDGET_KRW:         ${{ vars.DAILY_BUDGET_KRW }}
+          X_READ_COST_KRW:          ${{ vars.X_READ_COST_KRW }}
+          X_WRITE_COST_KRW:         ${{ vars.X_WRITE_COST_KRW }}
+          FOLLOWING_MAX_ACTIONS_PER_RUN: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_RUN }}
+          FOLLOWING_MAX_ACTIONS_PER_DAY: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_DAY }}
+
+        run: python run_following.py
+
+      # Job Summary (문서 23장) — SHADOW 결과를 Actions 화면에서 즉시 검증
+      - name: Write Job Summary
+        if: always()
+        run: |
+          echo "## Following Agent Result" >> $GITHUB_STEP_SUMMARY
+          latest=$(ls -t logs/following_report_*.json 2>/dev/null | head -1)
+          if [ -n "$latest" ]; then
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat "$latest" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "리포트 파일 없음" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: following-report-${{ github.run_id }}
+          path: |
+            logs/following_report_*.json
+            logs/following_*.log
+          retention-days: 14
