@@ -26,7 +26,7 @@ from reply_engine.config import (
     REPLY_SIMILARITY_THRESHOLD,
 )
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +49,25 @@ _IMPERATIVE_PATTERN = re.compile(
 _ECHO_STRIP_PATTERN = re.compile(r"@\w+|[^0-9A-Za-z가-힣]")
 ECHO_SIMILARITY_THRESHOLD: float = 0.5
 
+# F-1 (2026-08-20): 정중 상투어 — 에코 비교 전 양측에서 제거하는 토큰 (긴 것 우선).
+# 순수 감사 댓글("감사합니다^^")에 대한 모범 답글("저야말로 감사합니다")이
+# 임계 0.5에 걸려 오탈락한 실측 사례의 해소책. 에코 게이트의 본래 목적은
+# 상황어(축하/반갑 등) 미러링 차단이므로, 상투어를 걷어낸 "잔여"끼리만 비교한다.
+_COURTESY_TOKENS: tuple[str, ...] = (
+    "감사드립니다", "감사드려요", "감사합니다", "감사해요", "감사",
+    "고맙습니다", "고마워요", "저야말로", "진심으로", "정말", "너무", "항상",
+)
+
 
 def _normalize_for_echo(text: str) -> str:
     return _ECHO_STRIP_PATTERN.sub("", text or "")
+
+
+def _strip_courtesy(normalized: str) -> str:
+    """정규화 텍스트에서 정중 상투어를 제거한 잔여(상황어) 반환 (F-1)."""
+    for token in _COURTESY_TOKENS:
+        normalized = normalized.replace(token, "")
+    return normalized
 
 
 def _char_bigrams(text: str) -> set[str]:
@@ -104,10 +120,12 @@ def check_reply(
         return False, "GATE_QUESTION"
 
     if comment_text:
-        norm_reply = _normalize_for_echo(text)
-        norm_comment = _normalize_for_echo(comment_text)
-        if norm_reply and norm_comment:
-            echo = jaccard_similarity(norm_reply, norm_comment)
+        # F-1: 상투어를 걷어낸 상황어 잔여끼리 비교.
+        # 댓글 잔여가 비면(순수 감사 댓글) 미러링할 상황어가 없으므로 에코 검사 생략.
+        residual_reply = _strip_courtesy(_normalize_for_echo(text))
+        residual_comment = _strip_courtesy(_normalize_for_echo(comment_text))
+        if residual_reply and residual_comment:
+            echo = jaccard_similarity(residual_reply, residual_comment)
             if echo >= ECHO_SIMILARITY_THRESHOLD:
                 logger.info(f"[Gate] 에코 탈락 ({echo:.2f}): '{text}' ≈ 댓글 '{comment_text}'")
                 return False, "GATE_ECHO"

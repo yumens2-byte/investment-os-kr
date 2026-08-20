@@ -151,6 +151,6 @@ def test_versions_bumped_b_series():
     """보완 반영 버전 확인 (지침 5)."""
     from reply_engine import budget as budget_mod
 
-    assert run_reply.VERSION == "1.1.0"
+    assert run_reply.VERSION == "1.1.1"
     assert config.VERSION == "1.0.3"
     assert budget_mod.VERSION == "1.0.1"

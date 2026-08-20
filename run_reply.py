@@ -47,7 +47,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -273,6 +273,19 @@ def main() -> dict:
             gate_ok, gate_reason = gate.check_reply(
                 reply_text, recent_texts, comment_text=tweet["text"]
             )
+            # F-2 (2026-08-20): 배치 내 동일 문구 연쇄 생성으로 인한 유사도 탈락 시,
+            # 결정적 seed 풀 문구로 1회 한정 교체 후 게이트 전체 재검사 (커버리지 회복)
+            if not gate_ok and gate_reason == "GATE_SIMILARITY":
+                fallback_text = generator.pick_fallback(tweet["label"], tweet_id)
+                fb_ok, _fb_reason = gate.check_reply(
+                    fallback_text, recent_texts, comment_text=tweet["text"]
+                )
+                if fb_ok:
+                    logger.info(
+                        f"[Gate] 유사도 탈락 → 풀 fallback 대체: '{reply_text}' → '{fallback_text}'"
+                    )
+                    reply_text = fallback_text
+                    gate_ok, gate_reason = True, None
             if not gate_ok:
                 skip_reason = gate_reason
             elif mode == "live" and not guard.can_write():

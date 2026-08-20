@@ -19,7 +19,7 @@ import logging
 from core.gemini_gateway import call as gemini_call
 from reply_engine.config import REPLY_MAX_LENGTH
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,11 @@ _POOL_SUPPORTIVE: tuple[str, ...] = (
     "좋은 의견 감사합니다",
     "함께 지켜보시죠 🙂",
 )
+
+
+def pick_fallback(category: str, seed_key: str) -> str:
+    """GATE_SIMILARITY 탈락 시 재시도용 풀 문구 (F-2). 결정적 seed — 멱등."""
+    return _pick_from_pool(category, seed_key)
 
 
 def _pick_from_pool(category: str, seed_key: str) -> str:
@@ -81,7 +86,7 @@ def generate_batch(items: list[dict]) -> dict[str, str]:
         "6. 짧은 댓글(ㅋㅋ, ㅇㅈ 등)에는 짧고 담백한 감사만 — 과장 수식 금지\n"
         "7. 자연스러운 한국어 존댓말, 사람이 쓴 것처럼\n"
         "8. 해시태그·링크·자기소개 금지, 이모지는 최대 1개 (없어도 됨)\n"
-        "9. 답글끼리 표현이 겹치지 않게 각각 다르게\n\n"
+        "9. 답글끼리 표현이 겹치지 않게 각각 다르게 — 서로 다른 단어로 시작하라\n\n"
         "예시 (좋음/나쁨):\n"
         '- 댓글 "축하해주셔서 감사합니다" → 좋음: "저야말로 감사합니다 🙂" / '
         '나쁨: "축하해주셔서 감사합니다" (댓글을 그대로 되풀이 — 역할이 뒤집힘)\n'

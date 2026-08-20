@@ -320,5 +320,5 @@ def test_s13_shadow_gate_fail_recorded(monkeypatch):
 
 def test_pipeline_versions_bumped():
     """R-1/R-2 + B 시리즈 보완 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.1.0"
+    assert run_reply.VERSION == "1.1.1"
     assert store.VERSION == "1.0.1"
