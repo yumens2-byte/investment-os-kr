@@ -1,0 +1,410 @@
+"""following_engine — 단위 + E2E 파일럿 테스트 (문서 13·29장 요구 매핑).
+
+최중요 보안 테스트 (문서 29장):
+  dry_run → X Write 호출 수 = 0
+  shadow  → X Write 호출 수 = 0
+  FOLLOWING_ENABLED=false → 파이프라인 미진입
+  미지 실행모드 → live 진입 불가 (dry_run 강등)
+  live Guard 실패 → Write = 0
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import run_following
+from following_engine import analyzer, collector, config, decision, executor, prefilter, store
+from reply_engine import x_client
+
+# ---------------------------------------------------------------------------
+# config
+# ---------------------------------------------------------------------------
+
+def test_enabled_and_mode_failsafe(monkeypatch):
+    monkeypatch.setenv("FOLLOWING_ENABLED", "true")
+    assert config.is_enabled() is True
+    monkeypatch.setenv("FOLLOWING_ENABLED", "false")
+    assert config.is_enabled() is False
+    monkeypatch.delenv("FOLLOWING_ENABLED", raising=False)
+    assert config.is_enabled() is False
+
+    monkeypatch.setenv("FOLLOWING_EXECUTION_MODE", "LIVE")
+    assert config.get_mode() == "live"
+    monkeypatch.setenv("FOLLOWING_EXECUTION_MODE", "production")  # 미지 값
+    assert config.get_mode() == "dry_run"
+    monkeypatch.delenv("FOLLOWING_EXECUTION_MODE", raising=False)
+    assert config.get_mode() == "dry_run"
+
+
+# ---------------------------------------------------------------------------
+# collector
+# ---------------------------------------------------------------------------
+
+def test_collector_parses_timeline():
+    tweet = SimpleNamespace(
+        id=900, text="NVIDIA data center revenue is growing",
+        author_id=555, conversation_id=900, created_at=datetime.now(UTC),
+        public_metrics={"like_count": 10, "reply_count": 1, "retweet_count": 2,
+                        "quote_count": 0, "impression_count": 500},
+    )
+    user = SimpleNamespace(id=555, username="fin_writer",
+                           public_metrics={"followers_count": 1200})
+    resp = SimpleNamespace(data=[tweet], includes={"users": [user]},
+                           meta={"newest_id": "900"})
+
+    class _Client:
+        def get_home_timeline(self, **_kwargs):
+            return resp
+
+    result = collector.fetch_home_timeline(_Client(), since_id=None)
+    assert result["success"] is True
+    assert result["tweets"][0]["metrics"]["likes"] == 10
+    assert result["users"]["555"]["username"] == "fin_writer"
+    assert result["newest_id"] == "900"
+
+
+def test_collector_failure_is_safe():
+    class _Client:
+        def get_home_timeline(self, **_kwargs):
+            raise RuntimeError("403 Forbidden")   # 요금제 미허용 시나리오
+
+    result = collector.fetch_home_timeline(_Client(), since_id="1")
+    assert result["success"] is False
+    assert result["tweets"] == []
+
+
+# ---------------------------------------------------------------------------
+# prefilter
+# ---------------------------------------------------------------------------
+
+def _post(**over):
+    base = {
+        "id": "p1", "author_id": "555", "conversation_id": "p1",
+        "text": "미국 반도체 업황과 금리 전망에 대한 긴 분석 글입니다. 데이터 포함.",
+        "created_at": datetime.now(UTC),
+        "metrics": {"likes": 5, "replies": 0, "reposts": 0, "quotes": 0, "impressions": 100},
+    }
+    base.update(over)
+    return base
+
+
+def test_prefilter_static_rules():
+    assert prefilter.check_static(_post(author_id="me"), "me", set())[1] == "SELF"
+    assert prefilter.check_static(_post(), "me", {"555"})[1] == "BLACKLIST"
+    assert prefilter.check_static(_post(text="짧은 글"), "me", set())[1] == "TOO_SHORT"
+    assert prefilter.check_static(
+        _post(text="반도체 관련 무료 체험 이벤트를 소개합니다 지금 참여하세요"), "me", set()
+    )[1] == "TOPIC_EXCLUDE"
+    assert prefilter.check_static(
+        _post(text="오늘 점심 메뉴 고민이 많았던 하루였습니다 다들 뭐 드셨나요 저는 국밥"),
+        "me", set()
+    )[1] == "TOPIC_MISS"
+    ok, reason = prefilter.check_static(_post(), "me", set())
+    assert ok, reason
+
+
+def test_prefilter_db_rules(monkeypatch):
+    monkeypatch.setattr(prefilter.store, "action_exists", lambda _id: True)
+    assert prefilter.check_db(_post(), "shadow")[1] == "DUP"
+
+    monkeypatch.setattr(prefilter.store, "action_exists", lambda _id: False)
+    monkeypatch.setattr(prefilter.store, "author_in_cooldown", lambda *_a: True)
+    assert prefilter.check_db(_post(), "shadow")[1] == "AUTHOR_COOLDOWN"
+
+    monkeypatch.setattr(prefilter.store, "author_in_cooldown", lambda *_a: False)
+    assert prefilter.check_db(_post(), "shadow") == (True, None)
+
+
+# ---------------------------------------------------------------------------
+# analyzer
+# ---------------------------------------------------------------------------
+
+def _analysis(**over):
+    base = {
+        "relevant": True, "category": "SEMICONDUCTOR",
+        "relevance_score": 90, "importance_score": 88,
+        "engagement_value": 80, "content_value": 85,
+        "summary": "요약", "recommended_action": "QUOTE", "reason": "근거",
+        "generated_text": "HBM 수요 관련 데이터가 흥미로운 지점이네요.",
+    }
+    base.update(over)
+    return base
+
+
+def test_analyzer_parses_and_clamps(monkeypatch):
+    monkeypatch.setattr(
+        analyzer, "gemini_call",
+        lambda **_k: {"success": True, "data": [{
+            "id": "p1", "relevant": True, "category": "MACRO",
+            "relevanceScore": 150, "importanceScore": -5,
+            "engagementValue": "80", "contentValue": 90,
+            "summary": "s", "recommendedAction": "quote", "reason": "r",
+            "generatedText": "금리 경로 데이터가 인상적입니다",
+        }]},
+    )
+    out = analyzer.analyze_batch([{"id": "p1", "author": "a", "text": "t", "metrics": {}}])
+    assert out["p1"]["relevance_score"] == 100     # clamp 상한
+    assert out["p1"]["importance_score"] == 0      # clamp 하한
+    assert out["p1"]["recommended_action"] == "QUOTE"
+
+
+def test_analyzer_failure_returns_empty(monkeypatch):
+    monkeypatch.setattr(
+        analyzer, "gemini_call",
+        lambda **_k: {"success": False, "data": None, "error": "429"},
+    )
+    assert analyzer.analyze_batch([{"id": "p1", "author": "", "text": "t", "metrics": {}}]) == {}
+
+
+# ---------------------------------------------------------------------------
+# decision
+# ---------------------------------------------------------------------------
+
+def test_decision_order_and_mapping():
+    assert decision.decide(_analysis(relevant=False), []) == ("SKIP", "SKIP_NOT_RELEVANT")
+    assert decision.decide(_analysis(relevance_score=84), []) == ("SKIP", "SKIP_SCORE")
+    assert decision.decide(_analysis(content_value=79), []) == ("SKIP", "SKIP_SCORE")
+    assert decision.decide(_analysis(engagement_value=74), []) == ("SKIP", "SKIP_SCORE")
+    assert decision.decide(_analysis(), []) == ("QUOTE", None)
+    assert decision.decide(_analysis(recommended_action="PERMITTED_REPLY"), []) == (
+        "REVIEW_ONLY", None
+    )   # Q2 강등
+    assert decision.decide(_analysis(recommended_action="POST"), []) == (
+        "SKIP", "SKIPPED_POLICY"
+    )   # Q3 제외
+
+
+def test_decision_text_validation_and_similarity():
+    for bad in ("", "지금 매수 타이밍", "어떻게 보시나요?", "#반도체 좋아요"):
+        assert decision.decide(_analysis(generated_text=bad), [])[1] == "SKIP_TEXT_INVALID", bad
+    same = _analysis()["generated_text"]
+    assert decision.decide(_analysis(), [same])[1] == "SKIP_SIMILAR"
+
+
+# ---------------------------------------------------------------------------
+# executor guard
+# ---------------------------------------------------------------------------
+
+def test_live_safety_guard(monkeypatch):
+    monkeypatch.setattr(store, "action_exists", lambda _id: False)
+    monkeypatch.setattr(store, "author_in_cooldown", lambda *_a: False)
+    cand = {"post_id": "p1", "author_id": "555", "action_type": "QUOTE",
+            "generated_text": "데이터 흥미롭네요"}
+
+    assert executor.live_safety_guard(cand, 0, 0, 2) == (True, None)
+    assert executor.live_safety_guard(
+        {**cand, "action_type": "REVIEW_ONLY"}, 0, 0, 2
+    )[1] == "GUARD_ACTION_NOT_ALLOWED"
+    assert executor.live_safety_guard(
+        {**cand, "generated_text": " "}, 0, 0, 2
+    )[1] == "GUARD_TEXT_BLANK"
+    assert executor.live_safety_guard(cand, 5, 0, 2)[1] == "GUARD_DAILY_LIMIT"
+    assert executor.live_safety_guard(cand, 0, 2, 2)[1] == "GUARD_RUN_LIMIT"
+
+    monkeypatch.setattr(store, "action_exists", lambda _id: True)
+    assert executor.live_safety_guard(cand, 0, 0, 2)[1] == "GUARD_DUPLICATE"
+
+
+# ---------------------------------------------------------------------------
+# E2E 파일럿 — 공용 목킹
+# ---------------------------------------------------------------------------
+
+class _FMem:
+    def __init__(self):
+        self.actions: dict[str, dict] = {}
+        self.cursor_saved: list = []
+        self.budget_saved: list = []
+        self.writes: list = []   # X Write 호출 추적 (최중요)
+
+    def install(self, monkeypatch, mode_env: str, timeline_ok=True, posts=None):
+        monkeypatch.setenv("FOLLOWING_ENABLED", "true")
+        monkeypatch.setenv("FOLLOWING_EXECUTION_MODE", mode_env)
+        monkeypatch.setenv("X_MY_USER_ID", "111")
+
+        monkeypatch.setattr(run_following, "get_blacklist_ids", lambda: set())
+        monkeypatch.setattr(run_following, "get_cursor", lambda _a: None)
+        monkeypatch.setattr(
+            run_following, "upsert_cursor",
+            lambda a, s, u: self.cursor_saved.append((a, s, u)) or True,
+        )
+        monkeypatch.setattr(
+            run_following, "get_budget",
+            lambda d: {"budget_date": d, "read_calls": 0, "write_calls": 0,
+                       "gemini_calls": 0, "est_cost_krw": 0.0},
+        )
+        monkeypatch.setattr(
+            run_following, "upsert_budget",
+            lambda r: self.budget_saved.append(dict(r)) or True,
+        )
+
+        monkeypatch.setattr(x_client, "get_x_client", lambda: object())
+        monkeypatch.setattr(
+            collector, "fetch_home_timeline",
+            lambda _c, _s: {
+                "success": timeline_ok,
+                "tweets": (posts if posts is not None else [_post()]) if timeline_ok else [],
+                "users": {"555": {"username": "fin_writer", "followers": 1200}},
+                "newest_id": "999" if timeline_ok else None,
+                "error": None if timeline_ok else "403",
+            },
+        )
+
+        monkeypatch.setattr(store, "action_exists", lambda pid: pid in self.actions)
+        monkeypatch.setattr(store, "insert_action", self._insert)
+        monkeypatch.setattr(
+            store, "mark_executed",
+            lambda pid, aid: self.actions[pid].update(
+                {"action_status": "EXECUTED", "actual_x_post_id": aid}) or True,
+        )
+        monkeypatch.setattr(
+            store, "mark_failed",
+            lambda pid, c, m: self.actions[pid].update({"action_status": "FAILED"}) or True,
+        )
+        monkeypatch.setattr(store, "count_actions_today", lambda _m: 0)
+        monkeypatch.setattr(store, "author_in_cooldown", lambda *_a: False)
+        monkeypatch.setattr(store, "get_recent_generated_texts", lambda limit=30: [])
+
+        monkeypatch.setattr(
+            executor, "publish_quote",
+            lambda _c, text, pid: self.writes.append((pid, text)) or f"q-{pid}",
+        )
+        monkeypatch.setattr(run_following.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(run_following.random, "randint", lambda _a, _b: 0)
+        monkeypatch.setattr(
+            analyzer, "gemini_call",
+            lambda **_k: {"success": True, "data": [{
+                "id": "p1", "relevant": True, "category": "SEMICONDUCTOR",
+                "relevanceScore": 92, "importanceScore": 90, "engagementValue": 85,
+                "contentValue": 88, "summary": "s", "recommendedAction": "QUOTE",
+                "reason": "r", "generatedText": "HBM 수요 데이터가 흥미로운 지점이네요.",
+            }]},
+        )
+
+    def _insert(self, record):
+        pid = record["post_id"]
+        if pid in self.actions:
+            return False
+        self.actions[pid] = dict(record)
+        return True
+
+
+def test_pilot_disabled(monkeypatch):
+    monkeypatch.setenv("FOLLOWING_ENABLED", "false")
+    result = run_following.main()
+    assert result["exit_reason"] == "EXIT_DISABLED"
+
+
+def test_pilot_dry_run_zero_writes_zero_db(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "dry_run")
+    result = run_following.main()
+    assert result["success"] is True
+    assert result["would_execute"] == 1
+    assert mem.writes == []            # 최중요: X Write = 0
+    assert mem.actions == {}           # dry_run DB 무기록
+    assert mem.cursor_saved == []      # 커서 미전진
+
+
+def test_pilot_shadow_zero_writes_with_db(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "shadow")
+    result = run_following.main()
+    assert result["would_execute"] == 1
+    assert mem.writes == []            # 최중요: X Write = 0
+    assert mem.actions["p1"]["would_execute"] is True
+    assert mem.actions["p1"]["action_status"] == "SHADOW_COMPLETED"
+    assert mem.cursor_saved == [("kr_following", "999", "111")]
+
+
+def test_pilot_unknown_mode_degrades_no_writes(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "production")   # 미지 값 → dry_run 강등
+    result = run_following.main()
+    assert result["mode"] == "dry_run"
+    assert mem.writes == []
+
+
+def test_pilot_live_quote_executed(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "live")
+    result = run_following.main()
+    assert result["actual_writes"] == 1
+    assert mem.writes == [("p1", "HBM 수요 데이터가 흥미로운 지점이네요.")]
+    assert mem.actions["p1"]["action_status"] == "EXECUTED"
+    assert mem.actions["p1"]["actual_x_post_id"] == "q-p1"
+    assert len(mem.budget_saved) >= 2   # 발행 직후 + 종료
+
+
+def test_pilot_live_review_only_no_write(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "live")
+    monkeypatch.setattr(
+        analyzer, "gemini_call",
+        lambda **_k: {"success": True, "data": [{
+            "id": "p1", "relevant": True, "category": "MACRO",
+            "relevanceScore": 92, "importanceScore": 90, "engagementValue": 85,
+            "contentValue": 88, "summary": "s",
+            "recommendedAction": "PERMITTED_REPLY", "reason": "r", "generatedText": "",
+        }]},
+    )
+    result = run_following.main()
+    assert result["actual_writes"] == 0
+    assert mem.writes == []                               # 자동 Reply 금지 (Q2)
+    assert mem.actions["p1"]["action_type"] == "REVIEW_ONLY"
+    assert mem.actions["p1"]["action_status"] == "READY"  # 마스터 수동 처리 후보
+
+
+def test_pilot_live_guard_blocks_run_limit(monkeypatch):
+    mem = _FMem()
+    posts = [_post(id="p1"), _post(id="p2", author_id="666"), _post(id="p3", author_id="777")]
+    mem.install(monkeypatch, "live", posts=posts)
+    monkeypatch.setattr(
+        analyzer, "gemini_call",
+        lambda **_k: {"success": True, "data": [
+            {"id": pid, "relevant": True, "category": "AI", "relevanceScore": 92,
+             "importanceScore": 90, "engagementValue": 85, "contentValue": 88,
+             "summary": "s", "recommendedAction": "QUOTE", "reason": "r",
+             "generatedText": f"의미 있는 데이터 포인트네요 {n}"}
+            for n, pid in enumerate(["p1", "p2", "p3"])
+        ]},
+    )
+    result = run_following.main()
+    assert result["actual_writes"] == 2                   # per-run 상한 2 (Q5)
+    assert result["skip_reasons"]["RUN_LIMIT"] == 1
+    assert len(mem.writes) == 2
+
+
+def test_pilot_timeline_fetch_fail_no_writes(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "live", timeline_ok=False)
+    result = run_following.main()
+    assert result["exit_reason"] == "EXIT_TIMELINE_FETCH_FAIL"
+    assert mem.writes == []
+
+
+def test_pilot_ai_fail_all_skip(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "shadow")
+    monkeypatch.setattr(
+        analyzer, "gemini_call",
+        lambda **_k: {"success": False, "data": None, "error": "500"},
+    )
+    result = run_following.main()
+    assert result["would_execute"] == 0
+    assert result["skip_reasons"]["SKIP_AI_FAIL"] == 1
+    assert mem.writes == []
+
+
+def test_following_versions():
+    """지침 5 — 버전 상수 확인."""
+    from following_engine import analyzer as a
+    from following_engine import collector as c
+    from following_engine import decision as d
+    from following_engine import executor as e
+    from following_engine import prefilter as p
+    from following_engine import store as s
+
+    assert run_following.VERSION == "1.0.0"
+    for mod in (a, c, d, e, p, s, config):
+        assert mod.VERSION == "1.0.0"

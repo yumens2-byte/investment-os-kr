@@ -1,6 +1,7 @@
-# investment-os-kr — X Reply Engine v1.0.3
+# investment-os-kr — X Reply Engine v1.1.2 + Following Agent v1.0.0
 
-**전환일**: 2026-08-17 | **현재 역할**: 내 X 게시글 댓글 자동 호응 답글 파이프라인 (`run_reply.py`)
+**전환일**: 2026-08-17 | **역할 1 (INBOUND_REPLY)**: 내 게시글 댓글 자동 호응 답글 (`run_reply.py`, reply_engine/)
+**역할 2 (FOLLOWING_ENGAGEMENT, 2026-08-20)**: 팔로잉 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 (`run_following.py`, following_engine/) — 초기 배포 `FOLLOWING_ENABLED=false` + dry_run, LIVE 허용 액션은 QUOTE만 (자동 Reply 금지)
 **이전 역할**: KR Market 일일 브리핑 (kr_daily — cron 비활성, workflow_dispatch로만 수동 실행 가능)
 
 ## 🔍 점검(파일럿 테스트) 체계 매핑
@@ -15,6 +16,7 @@
 | 품질 회귀 | `tests/test_reply_quality.py`, `tests/test_reply_hardening.py` | 실사고 재현 회귀 (지시형 답글 GATE_IMPERATIVE, 단가 오설정 경고) |
 | 단위 | `tests/test_reply_config_gate_budget.py`, `tests/test_reply_filter_classify_generate.py`, `tests/test_reply_store.py` | 모듈별 경계값 |
 | 진입점 스모크 | `tests/test_ci_smoke.py` | 레거시 run_market 진입점 회귀 감지 |
+| Following Agent | `tests/test_following_agent.py` | 보안 매트릭스: dry_run/shadow X쓰기 0건(spy), 미지 모드 live 진입 불가, FOLLOWING_ENABLED=false 미실행, Guard 차단, 상한/쿨다운 |
 | 실환경 검증 | REPLY_MODE 3단계 (dry_run → shadow → live) + 리포트 `review` 배열 | 코드가 아닌 실데이터/설정 문제 검출 (artifact 검수) |
 
 **전수 테스트 표준 명령** (지침 11):

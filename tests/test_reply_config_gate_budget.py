@@ -119,11 +119,11 @@ def test_budget_count_mode_fallback(monkeypatch):
     monkeypatch.delenv("X_READ_COST_KRW", raising=False)
     monkeypatch.delenv("X_WRITE_COST_KRW", raising=False)
 
-    guard = BudgetGuard(_row(read=9, write=4))
+    guard = BudgetGuard(_row(read=15, write=4))
     assert guard.cost_mode is False
     assert guard.can_read() is True
     guard.record_read()
-    assert guard.can_read() is False    # 10 도달 (v1.1.0: 루트검증 +1콜 반영 상한)
+    assert guard.can_read() is False    # 16 도달 (reply+following 합산 상한)
     assert guard.can_write() is True
     guard.record_write()
     assert guard.can_write() is False   # 5 도달

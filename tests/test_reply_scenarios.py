@@ -196,8 +196,8 @@ def test_s07_budget_recheck_after_get_me(monkeypatch):
     mem.install(monkeypatch)
     monkeypatch.setattr(
         store, "get_budget",
-        lambda d: {"budget_date": d, "read_calls": 9, "write_calls": 0,
-                   "gemini_calls": 0, "est_cost_krw": 0.0},  # count 모드 10 중 9 소진
+        lambda d: {"budget_date": d, "read_calls": 15, "write_calls": 0,
+                   "gemini_calls": 0, "est_cost_krw": 0.0},  # count 모드 16 중 15 소진
     )
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
     monkeypatch.setattr(
@@ -213,7 +213,7 @@ def test_s07_budget_recheck_after_get_me(monkeypatch):
     result = run_reply.main()
     assert result["exit_reason"] == "EXIT_BUDGET"
     assert len(mem.budget_saved) == 1
-    assert mem.budget_saved[0]["read_calls"] == 10  # get_me 소모분 기록
+    assert mem.budget_saved[0]["read_calls"] == 16  # get_me 소모분 기록
 
 
 def test_s12_get_me_fail_saves_budget(monkeypatch):
