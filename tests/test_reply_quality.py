@@ -130,4 +130,4 @@ def test_versions_bumped_c_series():
     """C 시리즈 반영 버전 확인 (지침 5)."""
     assert run_reply.VERSION == "1.1.1"
     assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.1.1"
+    assert generator.VERSION == "1.1.2"
