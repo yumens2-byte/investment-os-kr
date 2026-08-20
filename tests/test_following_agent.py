@@ -406,5 +406,107 @@ def test_following_versions():
     from following_engine import store as s
 
     assert run_following.VERSION == "1.0.0"
-    for mod in (a, c, d, e, p, s, config):
+    assert config.VERSION == "1.0.1"   # H-1 (빈 env int 크래시) 수정 반영
+    assert a.VERSION == "1.0.1"        # J-1 (응답 잘림) 수정 반영
+    for mod in (c, d, e, p, s):
         assert mod.VERSION == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# J-1 (2026-08-20 실사고): 응답 잘림 → JSON 파손 → 전건 SKIP
+# ---------------------------------------------------------------------------
+
+def _mk_items(n: int) -> list[dict]:
+    return [
+        {"id": str(1000 + i), "author": f"acct{i}", "metrics": {"likes": 5},
+         "text": "반도체 업황 데이터 분석 게시물 " * 3}
+        for i in range(n)
+    ]
+
+
+def _valid_rows(items):
+    return [
+        {"id": i["id"], "relevant": True, "category": "SEMICONDUCTOR",
+         "relevanceScore": 90, "importanceScore": 85, "engagementValue": 80,
+         "contentValue": 85, "summary": "요약", "recommendedAction": "QUOTE",
+         "reason": "근거", "generatedText": "데이터 관점 코멘트"}
+        for i in items
+    ]
+
+
+def test_j1_retry_recovers_from_invalid_json(monkeypatch):
+    """실사고 재현: 1차 응답 JSON 파손(data=str) → 재시도 성공 시 분석 결과 확보."""
+    from following_engine import analyzer as fan
+
+    items = _mk_items(3)
+    calls = {"n": 0}
+
+    def _flaky(**kwargs):
+        calls["n"] += 1
+        assert kwargs["max_tokens"] == fan.ANALYZER_MAX_TOKENS  # 8192 적용 확인
+        if calls["n"] == 1:
+            return {"success": True, "data": '{"truncated": ', "error": None}  # 잘림 재현
+        return {"success": True, "data": _valid_rows(items), "error": None}
+
+    monkeypatch.setattr(fan, "gemini_call", _flaky)
+    result = fan.analyze_batch(items)
+    assert calls["n"] == 2                       # 재시도 정확히 1회
+    assert len(result) == 3
+
+
+def test_j1_retry_exhausted_failsafe(monkeypatch):
+    """재시도까지 실패하면 기존 fail-safe 유지 (빈 결과 → Decision SKIP)."""
+    from following_engine import analyzer as fan
+
+    monkeypatch.setattr(
+        fan, "gemini_call",
+        lambda **_k: {"success": True, "data": "not-a-list", "error": None},
+    )
+    assert fan.analyze_batch(_mk_items(2)) == {}
+
+
+def test_j1_chunking_boundaries(monkeypatch):
+    """10/11/25건 → 1/2/3회 chunk 호출, 결과 병합 검증."""
+    from following_engine import analyzer as fan
+
+    for n, expected_calls in ((10, 1), (11, 2), (25, 3)):
+        items = _mk_items(n)
+        seen: list[int] = []
+
+        def _ok(**kwargs):
+            batch_ids = [
+                line.split("|")[0].split(":")[1].strip()
+                for line in kwargs["prompt"].splitlines() if line.startswith("- id:")
+            ]
+            seen.append(len(batch_ids))
+            return {"success": True,
+                    "data": _valid_rows([{"id": b} for b in batch_ids]),
+                    "error": None}
+
+        monkeypatch.setattr(fan, "gemini_call", _ok)
+        result = fan.analyze_batch(items)
+        assert len(seen) == expected_calls, n
+        assert all(size <= fan.ANALYZER_BATCH_SIZE for size in seen)
+        assert len(result) == n
+
+
+def test_j1_prompt_slimming(monkeypatch):
+    """응답 슬림화 규칙(40자 요약·QUOTE만 generatedText)이 프롬프트에 명시되는지."""
+    from following_engine import analyzer as fan
+
+    captured = {}
+
+    def _cap(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "data": [], "error": None}
+
+    monkeypatch.setattr(fan, "gemini_call", _cap)
+    fan.analyze_batch(_mk_items(1))
+    assert "40자 이내" in captured["prompt"]
+    assert "QUOTE일 때만" in captured["prompt"]
+
+
+def test_j1_version_bumped():
+    from following_engine import analyzer as fan
+
+    assert fan.VERSION == "1.0.1"

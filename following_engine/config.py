@@ -13,17 +13,19 @@ from __future__ import annotations
 
 import os
 
-VERSION = "1.0.0"
+from reply_engine.config import env_int
+
+VERSION = "1.0.1"
 
 # ── Decision 임계 (문서 13장, Q5 승인 초기값) ──
-MIN_RELEVANCE_SCORE: int = int(os.environ.get("FOLLOWING_MIN_RELEVANCE", "85"))
-MIN_CONTENT_VALUE: int = int(os.environ.get("FOLLOWING_MIN_CONTENT", "80"))
-MIN_ENGAGEMENT_VALUE: int = int(os.environ.get("FOLLOWING_MIN_ENGAGEMENT", "75"))
+MIN_RELEVANCE_SCORE: int = env_int("FOLLOWING_MIN_RELEVANCE", 85)
+MIN_CONTENT_VALUE: int = env_int("FOLLOWING_MIN_CONTENT", 80)
+MIN_ENGAGEMENT_VALUE: int = env_int("FOLLOWING_MIN_ENGAGEMENT", 75)
 
-MAX_ACTIONS_PER_RUN: int = int(os.environ.get("FOLLOWING_MAX_ACTIONS_PER_RUN", "2"))
-MAX_ACTIONS_PER_DAY: int = int(os.environ.get("FOLLOWING_MAX_ACTIONS_PER_DAY", "5"))
+MAX_ACTIONS_PER_RUN: int = env_int("FOLLOWING_MAX_ACTIONS_PER_RUN", 2)
+MAX_ACTIONS_PER_DAY: int = env_int("FOLLOWING_MAX_ACTIONS_PER_DAY", 5)
 
-AUTHOR_COOLDOWN_HOURS: int = int(os.environ.get("FOLLOWING_AUTHOR_COOLDOWN_HOURS", "24"))
+AUTHOR_COOLDOWN_HOURS: int = env_int("FOLLOWING_AUTHOR_COOLDOWN_HOURS", 24)
 DUP_SIMILARITY_THRESHOLD: float = 0.85   # 생성 텍스트 중복 (문서 13장)
 
 # ── 수집/필터 (문서 7·9장) ──

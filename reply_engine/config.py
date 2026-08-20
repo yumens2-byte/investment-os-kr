@@ -15,15 +15,30 @@ from __future__ import annotations
 
 import os
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
+
+
+def env_int(name: str, default: int) -> int:
+    """
+    int 환경변수 안전 파서 (H-1, 2026-08-20).
+    yml이 미등록 GitHub Variable을 전달하면 env가 빈 문자열('')로 설정되어
+    int('')가 import 시점에 크래시하는 결함의 근본 수정 — 빈 값/파싱 불가는 기본값.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
 # ---------------------------------------------------------------------------
-REPLY_DAILY_CAP: int = int(os.environ.get("REPLY_DAILY_CAP", "8"))          # 일일 답글 상한
-REPLY_AUTHOR_DAILY_CAP: int = int(os.environ.get("REPLY_AUTHOR_DAILY_CAP", "1"))  # 사용자별/일
-REPLY_CONV_DAILY_CAP: int = int(os.environ.get("REPLY_CONV_DAILY_CAP", "3"))      # 대화별/일
-REPLY_MAX_AGE_HOURS: int = int(os.environ.get("REPLY_MAX_AGE_HOURS", "24"))  # 폐기 (승인 D)
+REPLY_DAILY_CAP: int = env_int("REPLY_DAILY_CAP", 8)          # 일일 답글 상한
+REPLY_AUTHOR_DAILY_CAP: int = env_int("REPLY_AUTHOR_DAILY_CAP", 1)  # 사용자별/일
+REPLY_CONV_DAILY_CAP: int = env_int("REPLY_CONV_DAILY_CAP", 3)      # 대화별/일
+REPLY_MAX_AGE_HOURS: int = env_int("REPLY_MAX_AGE_HOURS", 24)  # 폐기 (승인 D)
 
 # 답글 텍스트 규격
 REPLY_MAX_LENGTH: int = 40          # 공백 포함 최대 길이 ("한 줄 미만" 정책)
@@ -39,7 +54,7 @@ STARTUP_JITTER_MAX_SEC: int = 300
 
 # 발행 직전 랜덤 딜레이 상한 (초) — live 모드 전용, 첫 발행 직전 1회 적용 (안티봇)
 # cron 시각 + 처리시간으로 발행 시각이 고정 패턴화되는 것을 방지 (마스터 지시 2026-08-17)
-PUBLISH_START_DELAY_MAX_SEC: int = int(os.environ.get("REPLY_PUBLISH_DELAY_MAX_SEC", "600"))
+PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 
 # ---------------------------------------------------------------------------
 # 수집 설정
