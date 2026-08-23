@@ -1,0 +1,68 @@
+name: Shock News
+
+on:
+  schedule:
+    - cron: "55 6,18 * * *"   # KST 15:55 / 03:55 (비정각 — 스케줄러 지연 회피)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "실행 모드 (미지정 시 vars.SHOCK_EXECUTION_MODE, 그마저 없으면 dry_run)"
+        type: choice
+        options: [dry_run, shadow, live]
+        default: dry_run
+
+concurrency:
+  group: shock-news
+  cancel-in-progress: false    # L4: 동시 실행 차단 (중복 발행 방지)
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - name: 전수 테스트 (실패 시 파이프라인 차단)
+        run: python -m pytest -q tests/
+
+  shock:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90        # 슬롯 대기(최대 ~63분) + 처리 여유
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Shock News 실행
+        env:
+          SHOCK_ENABLED: ${{ vars.SHOCK_ENABLED }}
+          SHOCK_EXECUTION_MODE: ${{ inputs.mode || vars.SHOCK_EXECUTION_MODE || 'dry_run' }}
+          SHOCK_FORCE_SLOT: ${{ vars.SHOCK_FORCE_SLOT }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GEMINI_API_KEY_MAIN: ${{ secrets.GEMINI_API_KEY_MAIN }}
+          GEMINI_API_KEY_SUB: ${{ secrets.GEMINI_API_KEY_SUB }}
+          GEMINI_API_KEY_SUB2: ${{ secrets.GEMINI_API_KEY_SUB2 }}
+          GEMINI_API_KEY_PAY: ${{ secrets.GEMINI_API_KEY_PAY }}
+          DAILY_BUDGET_KRW: ${{ vars.DAILY_BUDGET_KRW }}
+        run: python run_shock_news.py
+
+      - name: 리포트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shock-report-${{ github.run_id }}
+          path: |
+            logs/shock_report_*.json
+            logs/shock_*.log
+          retention-days: 14
