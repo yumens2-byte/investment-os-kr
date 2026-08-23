@@ -50,10 +50,13 @@ jobs:
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          GEMINI_API_KEY_MAIN: ${{ secrets.GEMINI_API_KEY_MAIN }}
-          GEMINI_API_KEY_SUB: ${{ secrets.GEMINI_API_KEY_SUB }}
-          GEMINI_API_KEY_SUB2: ${{ secrets.GEMINI_API_KEY_SUB2 }}
-          GEMINI_API_KEY_PAY: ${{ secrets.GEMINI_API_KEY_PAY }}
+          
+          # Gemini 4키 chain
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_SUB_KEY:     ${{ secrets.GEMINI_API_SUB_KEY }}
+          GEMINI_API_SUB_SUB_KEY: ${{ secrets.GEMINI_API_SUB_SUB_KEY }}
+          GEMINI_API_SUB_PAY_KEY: ${{ secrets.GEMINI_API_SUB_PAY_KEY }}
+          
           DAILY_BUDGET_KRW: ${{ vars.DAILY_BUDGET_KRW }}
         run: python run_shock_news.py
 
