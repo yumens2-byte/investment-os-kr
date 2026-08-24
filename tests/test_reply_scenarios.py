@@ -179,9 +179,13 @@ def test_s06_within_batch_similarity(monkeypatch):
     )
 
     result = run_reply.main()
-    assert result["published"] == 1
-    assert result["skip_reasons"]["GATE_SIMILARITY"] == 1
-    assert mem.history["301"]["skip_reason"] == "GATE_SIMILARITY"  # S-13 계열
+    # G-2 풀 개편 후: 2번째 건은 F-2 풀 fallback으로 대체 발행 (커버리지 회복이 정답)
+    assert result["published"] == 2
+    assert "GATE_SIMILARITY" not in result["skip_reasons"]        # fallback이 흡수
+    assert mem.history["301"]["skip_reason"] is None
+    assert mem.history["301"]["response_text"] in (
+        generator._POOL_POSITIVE + generator._POOL_SUPPORTIVE
+    )                                                              # 풀 문구로 대체 발행
 
 
 # ---------------------------------------------------------------------------

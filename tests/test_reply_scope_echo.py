@@ -185,5 +185,5 @@ def test_versions_bumped_p_series():
     assert run_reply.VERSION == "1.1.1"
     assert x_client.VERSION == "1.1.0"
     assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.1.2"
+    assert generator.VERSION == "1.2.0"
     assert config.VERSION == "1.0.5"

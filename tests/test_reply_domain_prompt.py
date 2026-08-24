@@ -67,4 +67,60 @@ def test_g1_market_cheer_replies_pass_gates():
 
 def test_g1_version_bumped():
     """G-1 반영 버전 확인 (지침 5)."""
-    assert generator.VERSION == "1.1.2"
+    assert generator.VERSION == "1.2.0"
+
+
+# ---------------------------------------------------------------------------
+# G-2 (2026-08-24): 톤 캐주얼화 — 프롬프트 v4 + 풀 개편
+# ---------------------------------------------------------------------------
+
+def test_g2_prompt_contains_tone_rules(monkeypatch):
+    """가벼운 톤 규칙(감탄사·ㅎㅎ·이모지 다양화·격식체 반복 금지)이 명시돼야 한다."""
+    captured = _capture_prompt(monkeypatch)
+    generator.generate_batch([{"id": "a", "text": "잘보고 있어요", "label": "POSITIVE"}])
+    prompt = captured["prompt"]
+    for required in ("가볍고 친근한", "감탄사", "ㅎㅎ", "0~2개", "매번 같은 이모지 금지"):
+        assert required in prompt, required
+
+
+def test_g2_prompt_keeps_all_policy_rules(monkeypatch):
+    """톤 개편이 정책 규칙(C-1/P-2/G-1/F-2)을 하나도 깨지 않아야 한다 (회귀 방지)."""
+    captured = _capture_prompt(monkeypatch)
+    generator.generate_batch([{"id": "a", "text": "감사합니다", "label": "POSITIVE"}])
+    prompt = captured["prompt"]
+    for required in (
+        "절대 금지", "행동 안내", "질문이어도 답하지 말고",       # C-1
+        "저야말로", "상황어", "아는 척", "역할이 뒤집힘",         # P-2
+        "돈복사", "슈드", "하지 않은 행동에 감사",               # G-1
+        "서로 다른 단어로 시작",                                  # F-2
+    ):
+        assert required in prompt, required
+
+
+def test_g2_pools_casual_and_gate_safe():
+    """개편된 풀: 이모지/ㅎㅎ 포함 비율이 높고, 전 문구가 게이트(에코 포함) 통과."""
+    import re
+
+    from reply_engine import gate
+
+    pool = generator._POOL_POSITIVE + generator._POOL_SUPPORTIVE
+    casual = sum(
+        1 for t in pool
+        if re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", t) or "ㅎㅎ" in t
+    )
+    assert casual / len(pool) >= 0.8                      # 캐주얼 신호 80% 이상
+
+    for t in pool:
+        ok, reason = gate.check_reply(t, [], comment_text="오늘 브리핑 잘 봤습니다")
+        assert ok, (t, reason)
+
+
+def test_g2_fallback_still_deterministic():
+    """풀 교체 후에도 결정적 선택(멱등) 유지."""
+    a = generator.pick_fallback("POSITIVE", "seed-1")
+    assert a == generator.pick_fallback("POSITIVE", "seed-1")
+    assert a in generator._POOL_POSITIVE
+
+
+def test_g2_version_bumped():
+    assert generator.VERSION == "1.2.0"
