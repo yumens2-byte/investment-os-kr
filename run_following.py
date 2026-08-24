@@ -45,7 +45,7 @@ from reply_engine.store import (
     upsert_cursor,
 )
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
@@ -293,7 +293,7 @@ def main() -> dict:
             would = action_type == "QUOTE"
             status = "SHADOW_COMPLETED" if would else "READY"
             if not store.insert_action(
-                executor.build_record(candidate, mode, would, status, None)
+                executor.build_record(candidate, mode, would, status, skip_reason)
             ):
                 entry["result"] = "HISTORY_INSERT_FAIL"
                 _skip(post_id, "HISTORY_INSERT_FAIL")
@@ -307,7 +307,9 @@ def main() -> dict:
 
         # ── live ──
         if action_type == "REVIEW_ONLY":
-            store.insert_action(executor.build_record(candidate, mode, False, "READY", None))
+            store.insert_action(
+                executor.build_record(candidate, mode, False, "READY", skip_reason)
+            )
             entry["result"] = "READY"   # 마스터 수동 처리 후보 (문서 27장)
             continue
 

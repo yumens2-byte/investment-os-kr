@@ -163,9 +163,18 @@ def test_analyzer_failure_returns_empty(monkeypatch):
 
 def test_decision_order_and_mapping():
     assert decision.decide(_analysis(relevant=False), []) == ("SKIP", "SKIP_NOT_RELEVANT")
-    assert decision.decide(_analysis(relevance_score=84), []) == ("SKIP", "SKIP_SCORE")
-    assert decision.decide(_analysis(content_value=79), []) == ("SKIP", "SKIP_SCORE")
-    assert decision.decide(_analysis(engagement_value=74), []) == ("SKIP", "SKIP_SCORE")
+    # T-4 이후: 점수 미달이라도 R≥75 + 참여형 추천이면 REVIEW_ONLY 승격 (자동 발행 없음)
+    assert decision.decide(_analysis(relevance_score=84), []) == (
+        "REVIEW_ONLY", "NEAR_MISS_SCORE"
+    )
+    assert decision.decide(_analysis(content_value=79), []) == (
+        "REVIEW_ONLY", "NEAR_MISS_SCORE"
+    )
+    assert decision.decide(_analysis(engagement_value=74), []) == (
+        "REVIEW_ONLY", "NEAR_MISS_SCORE"
+    )
+    # 순수 SKIP_SCORE: R이 REVIEW_MIN(75) 미만
+    assert decision.decide(_analysis(relevance_score=70), []) == ("SKIP", "SKIP_SCORE")
     assert decision.decide(_analysis(), []) == ("QUOTE", None)
     assert decision.decide(_analysis(recommended_action="PERMITTED_REPLY"), []) == (
         "REVIEW_ONLY", None
@@ -405,11 +414,12 @@ def test_following_versions():
     from following_engine import prefilter as p
     from following_engine import store as s
 
-    assert run_following.VERSION == "1.0.0"
-    assert config.VERSION == "1.0.1"   # H-1 (빈 env int 크래시) 수정 반영
+    assert run_following.VERSION == "1.0.1"   # T-4 사유 보존
+    assert config.VERSION == "1.0.2"   # T-4 REVIEW_MIN_RELEVANCE
     assert a.VERSION == "1.0.1"        # J-1 (응답 잘림) 수정 반영
     assert p.VERSION == "1.0.1"        # K-1 (RT 유입 차단) 수정 반영
-    for mod in (c, d, e, s):
+    assert d.VERSION == "1.1.0"        # T-4 near-miss REVIEW_ONLY
+    for mod in (c, e, s):
         assert mod.VERSION == "1.0.0"
 
 
@@ -553,3 +563,62 @@ def test_k1_rt_checked_before_topic():
         {"id": "1", "author_id": "999", "text": rt_text}, "111", set()
     )
     assert not ok and reason == "SKIP_RETWEET"
+
+
+# ---------------------------------------------------------------------------
+# T-4 (2026-08-24): near-miss REVIEW_ONLY 승격 — 실측 픽스처 기반
+# ---------------------------------------------------------------------------
+
+def _t4_analysis(r, c, e, action="QUOTE"):
+    return {"relevant": True, "relevance_score": r, "content_value": c,
+            "engagement_value": e, "recommended_action": action,
+            "generated_text": "데이터 관점에서 흥미로운 지점입니다", "summary": "s", "reason": "r"}
+
+
+def test_t4_near_miss_promoted_to_review_only():
+    """실측 픽스처: 중국 메모리 글(R80/C75/E30) — SKIP_SCORE 대신 REVIEW_ONLY 승격."""
+    action, reason = decision.decide(_t4_analysis(80, 75, 30), [])
+    assert action == "REVIEW_ONLY" and reason == "NEAR_MISS_SCORE"
+
+
+def test_t4_low_relevance_still_skipped():
+    """R < REVIEW_MIN(75)은 승격 없이 기존대로 SKIP_SCORE."""
+    action, reason = decision.decide(_t4_analysis(70, 70, 50), [])
+    assert action == "SKIP" and reason == "SKIP_SCORE"
+
+
+def test_t4_non_engage_action_not_promoted():
+    """추천이 POST면 near-miss여도 승격하지 않는다."""
+    action, reason = decision.decide(_t4_analysis(80, 75, 30, action="POST"), [])
+    assert action == "SKIP" and reason == "SKIP_SCORE"
+
+
+def test_t4_full_pass_still_quote(monkeypatch):
+    """전 축 통과는 기존대로 QUOTE (회귀 무결)."""
+    monkeypatch.setattr(decision, "MIN_ENGAGEMENT_VALUE", 65)
+    action, reason = decision.decide(_t4_analysis(90, 80, 70), [])
+    assert action == "QUOTE" and reason is None
+
+
+def test_t4_e2e_review_only_never_publishes_keeps_text(monkeypatch):
+    """near-miss 승격분은 live에서도 발행 0, 텍스트·사유가 DB에 보존 (수동 후보)."""
+    mem = _FMem()
+    mem.install(monkeypatch, "live")
+    monkeypatch.setattr(
+        analyzer, "gemini_call",
+        lambda **_k: {"success": True, "data": [{
+            "id": "p1", "relevant": True, "category": "SEMICONDUCTOR",
+            "relevanceScore": 80, "importanceScore": 80, "engagementValue": 30,
+            "contentValue": 75, "summary": "s", "recommendedAction": "QUOTE",
+            "reason": "r", "generatedText": "공급망 데이터가 흥미롭습니다",
+        }]},
+    )
+    result = run_following.main()
+    assert mem.writes == []                               # 발행 절대 없음
+    assert result["actual_writes"] == 0
+    row = mem.actions["p1"]
+    assert row["action_type"] == "REVIEW_ONLY"
+    assert row["action_status"] == "READY"
+    assert row["skip_reason"] == "NEAR_MISS_SCORE"
+    assert row["generated_text"] == "공급망 데이터가 흥미롭습니다"
+    assert row["would_execute"] is False

@@ -5,7 +5,7 @@ Decision Engine (문서 13장 판단 순서) + Action 매핑 (Q2/Q3 승인 반�
 
 매핑: QUOTE→QUOTE / PERMITTED_REPLY→REVIEW_ONLY(강등) / POST→SKIPPED_POLICY(범위 제외)
 skip 코드: SKIP_NOT_RELEVANT / SKIP_SCORE / SKIP_TEXT_INVALID / SKIP_SIMILAR
-           / SKIPPED_POLICY / SKIP
+           / SKIPPED_POLICY / SKIP / (REVIEW_ONLY 사유) NEAR_MISS_SCORE
 """
 
 from __future__ import annotations
@@ -18,11 +18,12 @@ from following_engine.config import (
     MIN_ENGAGEMENT_VALUE,
     MIN_RELEVANCE_SCORE,
     QUOTE_MAX_LENGTH,
+    REVIEW_MIN_RELEVANCE,
 )
 from reply_engine.config import BANNED_WORDS
 from reply_engine.gate import jaccard_similarity
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,14 @@ def decide(analysis: dict, recent_texts: list[str]) -> tuple[str, str | None]:
         or analysis["content_value"] < MIN_CONTENT_VALUE
         or analysis["engagement_value"] < MIN_ENGAGEMENT_VALUE
     ):
+        # T-4 (2026-08-24): near-miss 승격 — R이 REVIEW_MIN_RELEVANCE 이상이고
+        # 참여형 추천(QUOTE/PERMITTED_REPLY)이면 자동 발행 없는 수동 후보로 적재.
+        # 자동화 리스크 0 (REVIEW_ONLY는 어떤 모드에서도 발행되지 않음).
+        if (
+            analysis["relevance_score"] >= REVIEW_MIN_RELEVANCE
+            and analysis["recommended_action"] in ("QUOTE", "PERMITTED_REPLY")
+        ):
+            return "REVIEW_ONLY", "NEAR_MISS_SCORE"
         return "SKIP", "SKIP_SCORE"
 
     recommended = analysis["recommended_action"]

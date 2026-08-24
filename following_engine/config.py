@@ -15,12 +15,16 @@ import os
 
 from reply_engine.config import env_int
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 # ── Decision 임계 (문서 13장, Q5 승인 초기값) ──
 MIN_RELEVANCE_SCORE: int = env_int("FOLLOWING_MIN_RELEVANCE", 85)
 MIN_CONTENT_VALUE: int = env_int("FOLLOWING_MIN_CONTENT", 80)
 MIN_ENGAGEMENT_VALUE: int = env_int("FOLLOWING_MIN_ENGAGEMENT", 75)
+
+# T-4 (2026-08-24): 점수 소폭 미달 구간을 자동 발행 없이 REVIEW_ONLY(마스터 수동 후보)로 적재.
+# 볼륨 보완의 안전 축 — R이 이 값 이상이면 near-miss 승격 대상.
+REVIEW_MIN_RELEVANCE: int = env_int("FOLLOWING_REVIEW_MIN_RELEVANCE", 75)
 
 MAX_ACTIONS_PER_RUN: int = env_int("FOLLOWING_MAX_ACTIONS_PER_RUN", 2)
 MAX_ACTIONS_PER_DAY: int = env_int("FOLLOWING_MAX_ACTIONS_PER_DAY", 5)
