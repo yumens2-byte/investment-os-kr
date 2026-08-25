@@ -45,7 +45,7 @@ from reply_engine.store import (
     upsert_cursor,
 )
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
@@ -155,7 +155,14 @@ def main() -> dict:
     guard.record_read()
     if not fetched["success"]:
         # 요금제 미허용(403 등) 포함 — 명확 종료, 쓰기 0
-        summary["exit_reason"] = "EXIT_TIMELINE_FETCH_FAIL"
+        if x_client.is_spend_cap_error(fetched.get("error")):
+            logger.error(
+                "[Step2] X API 월간 지출 상한 도달 — 코드 문제 아님. "
+                "Developer Portal에서 spend cap 확인/상향 필요 (N-1)"
+            )
+            summary["exit_reason"] = "EXIT_SPEND_CAP"
+        else:
+            summary["exit_reason"] = "EXIT_TIMELINE_FETCH_FAIL"
         summary["fetch_error"] = fetched["error"]
         if db_write_allowed:
             upsert_budget(guard.row)
@@ -377,5 +384,8 @@ def main() -> dict:
 
 if __name__ == "__main__":
     result = main()
-    fail_reasons = {"EXIT_NO_CREDENTIALS", "EXIT_GET_ME_FAIL", "EXIT_TIMELINE_FETCH_FAIL"}
+    fail_reasons = {
+        "EXIT_NO_CREDENTIALS", "EXIT_GET_ME_FAIL",
+        "EXIT_TIMELINE_FETCH_FAIL", "EXIT_SPEND_CAP",
+    }
     sys.exit(1 if result.get("exit_reason") in fail_reasons else 0)

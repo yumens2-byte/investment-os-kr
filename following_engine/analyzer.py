@@ -6,6 +6,10 @@ Gemini 기반 게시물 분석 (문서 12장 — Structured JSON).
 
 실패/파싱 불가 건은 결과에서 제외 → Decision에서 자동 SKIP (fail-safe, 문서 19장).
 
+L-1 (2026-08-24 실사고 — 19자리 트윗 ID를 응답에서 되받는 구조라 LLM이 자릿수를 훼손,
+  4건 중 3건이 SKIP_AI_FAIL로 유실): 프롬프트에 짧은 로컬 별칭(p1,p2...)을 부여하고
+  응답 별칭 → 원 post_id 역매핑. LLM이 재현할 토큰이 2~3자로 줄어 훼손 가능성 제거.
+
 J-1 (2026-08-20 실사고 — 11건 배치 응답이 max_tokens=2048에 잘려 JSON 파손, 전건 SKIP):
   ① max_tokens 8192  ② 10건 단위 chunk 분할  ③ 응답 슬림화(summary/reason 40자,
   generatedText는 QUOTE만)  ④ chunk별 Invalid JSON 1회 재시도 (문서 25장)
@@ -18,7 +22,7 @@ import logging
 from core.gemini_gateway import call as gemini_call
 from following_engine.config import QUOTE_MAX_LENGTH
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +55,15 @@ def _analyze_chunk(items: list[dict]) -> dict[str, dict]:
     if not items:
         return {}
 
+    # L-1: 짧은 로컬 별칭 ↔ 원 post_id (chunk 내에서만 유효)
+    alias_to_id: dict[str, str] = {}
     lines = []
-    for i in items:
+    for idx, i in enumerate(items, start=1):
+        alias = f"p{idx}"
+        alias_to_id[alias] = str(i["id"])
         m = i.get("metrics", {})
         lines.append(
-            f'- id: {i["id"]} | author: {i.get("author", "")} | '
+            f'- id: {alias} | author: {i.get("author", "")} | '
             f'likes={m.get("likes", 0)} reposts={m.get("reposts", 0)} | '
             f'text: "{i["text"][:400]}"'
         )
@@ -74,7 +82,8 @@ def _analyze_chunk(items: list[dict]) -> dict[str, dict]:
         "  코멘트 규칙: 데이터·사실 중심 관찰 톤, 매수/매도 지시·수익 보장·확정적 전망 금지,\n"
         "  해시태그·링크 금지, 질문으로 끝내지 말 것, 원문 문장 복사 금지\n\n"
         + "\n".join(lines)
-        + '\n\nJSON 배열로만 응답: [{"id":"...","relevant":true,"category":"...",'
+        + "\n\n각 항목의 id는 위에 주어진 값(p1, p2 ...)을 그대로 반환하라. 변형 금지.\n"
+        + 'JSON 배열로만 응답: [{"id":"...","relevant":true,"category":"...",'
         '"relevanceScore":0,"importanceScore":0,"engagementValue":0,"contentValue":0,'
         '"summary":"...","recommendedAction":"...","reason":"...","generatedText":"..."}]'
     )
@@ -104,11 +113,19 @@ def _analyze_chunk(items: list[dict]) -> dict[str, dict]:
     for row in result["data"]:
         if not isinstance(row, dict):
             continue
-        row_id = str(row.get("id", ""))
+        raw_id = str(row.get("id", "")).strip()
+        post_id = alias_to_id.get(raw_id)
+        if post_id is None:
+            # L-1: 별칭 불일치(훼손/환각) — 원 ID 직접 반환 케이스는 허용, 그 외 제외
+            if raw_id in alias_to_id.values():
+                post_id = raw_id
+            else:
+                logger.warning(f"[FAnalyzer] 미지 id 응답 제외 (L-1): '{raw_id}'")
+                continue
         action = str(row.get("recommendedAction", "SKIP")).strip().upper()
-        if not row_id or action not in _VALID_ACTIONS:
+        if action not in _VALID_ACTIONS:
             continue
-        analyses[row_id] = {
+        analyses[post_id] = {
             "relevant": bool(row.get("relevant", False)),
             "category": str(row.get("category", ""))[:40],
             "relevance_score": _clamp(row.get("relevanceScore")),

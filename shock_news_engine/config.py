@@ -16,11 +16,12 @@ SHOCK_NEWS — 당일 충격 사건 발행 설정 (2026-08-22 마스터 승인 �
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 from reply_engine.config import env_int
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 
 KST = timezone(timedelta(hours=9))
 
@@ -42,6 +43,43 @@ TIER_KEYWORDS: dict[int, tuple[str, ...]] = {
     4: ("사망", "추락", "참변", "화재", "붕괴", "충돌",
         "dead", "death", "fatal", "crash", "collapse"),
 }
+
+# ── 미성년 관련 사건 제외 (O-1, 2026-08-25 마스터 지시) ──
+# 계정 리스크: 미성년 피해자·피의자 사건은 확산 시 2차 가해 논란으로 이어질 수 있고,
+# 국내법상 소년범 신상 보도 제약도 강하다. 게이트가 아니라 **후보 단계에서 배제**한다.
+# 오탈락(성인 사건인데 걸림)은 무발행 방향이라 안전한 손실로 수용.
+MINOR_KEYWORDS: tuple[str, ...] = (
+    # KR
+    "미성년", "청소년", "초등학생", "중학생", "고등학생", "여중생", "남중생",
+    "여고생", "남고생", "여학생", "남학생", "10대", "십대", "아동", "유아",
+    "어린이", "영아", "신생아", "소년범", "학대아동", "보육원", "어린이집",
+    "유치원", "초등학교", "중학교", "고등학교", "미취학", "친딸", "친아들",
+    # EN
+    "minor", "teen", "teenage", "teenager", "child", "children", "toddler",
+    "infant", "baby", "schoolgirl", "schoolboy", "juvenile", "kindergarten",
+    "elementary school", "high school", "middle school",
+)
+
+# 나이 표기 감지 — 18세 미만이면 제외 ("16세", "17-year-old", "15살")
+_MINOR_AGE_PATTERN = re.compile(
+    r"(\d{1,2})\s?(?:세|살|-?\s?year[-\s]?old|yo\b)", re.IGNORECASE
+)
+MINOR_AGE_THRESHOLD = 18
+
+
+def involves_minor(title: str) -> bool:
+    """제목에 미성년 관련 신호가 있으면 True (O-1)."""
+    text = (title or "").lower()
+    if any(kw.lower() in text for kw in MINOR_KEYWORDS):
+        return True
+    for raw_age in _MINOR_AGE_PATTERN.findall(text):
+        try:
+            if int(raw_age) < MINOR_AGE_THRESHOLD:
+                return True
+        except ValueError:
+            continue
+    return False
+
 
 # ── RSS 소스 (키 불요) ──
 RSS_SOURCES: dict[str, tuple[str, ...]] = {
@@ -77,18 +115,40 @@ def get_mode() -> str:
     return mode
 
 
-def determine_slot(now_kst: datetime) -> tuple[str, str] | None:
+def determine_slot(now_kst: datetime, mode: str = "live") -> tuple[str, str] | None:
     """
     현재 KST 시각 → (slot_key, session) | None.
-    slot_key 예: '20260822-KR16'. 테스트/수동 실행용 SHOCK_FORCE_SLOT(KR16|US04) 지원.
+
+    live: 정규 슬롯 시간대(KST 15~16시 / 03~04시)에만 실행. 그 외 None.
+    dry_run/shadow (2026-08-24 승인): **시간 무관 실행**. 슬롯 밖이면 시간대로 세션을 유추하고
+      slot_key에 '-adhoc-HHMM' 접미를 붙인다 —
+      ① 검증 실행을 반복해도 매번 통과 (L2에 막히지 않음)
+      ② 그날 정규 슬롯의 L2 방어는 그대로 보존 (애드혹 키와 정규 키가 다름)
+      ③ 동일 기사 반복 적재는 L1(article_hash PK)이 계속 차단
+    slot_key 예: 정규 '20260824-KR16' / 애드혹 '20260824-KR16-adhoc-1432'.
+    SHOCK_FORCE_SLOT(KR16|US04)은 세션 강제 지정용으로 계속 유효.
     """
+    date_str = now_kst.strftime("%Y%m%d")
     forced = os.environ.get("SHOCK_FORCE_SLOT", "").strip().upper()
+
     if forced in ("KR16", "US04"):
         session = "KR" if forced == "KR16" else "US"
-        return f"{now_kst.strftime('%Y%m%d')}-{forced}", session
+        in_regular = (
+            now_kst.hour in (SLOT_KR_HOURS if forced == "KR16" else SLOT_US_HOURS)
+        )
+        if in_regular or mode == "live":
+            return f"{date_str}-{forced}", session
+        return f"{date_str}-{forced}-adhoc-{now_kst.strftime('%H%M')}", session
 
     if now_kst.hour in SLOT_KR_HOURS:
-        return f"{now_kst.strftime('%Y%m%d')}-KR16", "KR"
+        return f"{date_str}-KR16", "KR"
     if now_kst.hour in SLOT_US_HOURS:
-        return f"{now_kst.strftime('%Y%m%d')}-US04", "US"
+        return f"{date_str}-US04", "US"
+
+    if mode in ("dry_run", "shadow"):
+        # 슬롯 밖 검증 실행 — 시간대로 세션 유추 (KST 정오 이후는 한국, 이전은 미국)
+        slot_name = "KR16" if now_kst.hour >= 12 else "US04"
+        session = "KR" if slot_name == "KR16" else "US"
+        return f"{date_str}-{slot_name}-adhoc-{now_kst.strftime('%H%M')}", session
+
     return None

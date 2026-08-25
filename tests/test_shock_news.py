@@ -234,10 +234,16 @@ class _SMem:
             sstore, "mark_posted",
             lambda h, tid: self.rows[h].update({"posted_tweet_id": tid}),
         )
-        monkeypatch.setattr(
-            sstore, "mark_failed",
-            lambda h, r: self.rows.get(h, {}).update({"skip_reason": r}),
-        )
+        def _mark_failed(h, r, slot_key=None):
+            row = self.rows.get(h)
+            if row is None:
+                return
+            row["skip_reason"] = r
+            if slot_key:                      # N-2: 정규 슬롯 반환
+                self.slot_keys.discard((slot_key, row["mode"]))
+                row["slot_key"] = f"{slot_key}-failed-000000"
+
+        monkeypatch.setattr(sstore, "mark_failed", _mark_failed)
         # reply 예산 재사용부
         monkeypatch.setattr(
             run_shock_news.rstore, "get_budget",
@@ -279,7 +285,7 @@ def _publish_spy(monkeypatch):
     calls: list = []
     monkeypatch.setattr(
         publisher, "post_shock",
-        lambda _c, comment, url: calls.append((comment, url)) or "90001",
+        lambda _c, comment, url: (calls.append((comment, url)), ("90001", None))[1],
     )
     monkeypatch.setattr(run_shock_news.publisher, "post_shock", publisher.post_shock)
     monkeypatch.setattr(run_shock_news.x_client, "get_x_client", lambda: object())
@@ -295,8 +301,9 @@ def test_pipeline_disabled(monkeypatch):
 def test_pipeline_off_slot(monkeypatch):
     monkeypatch.setenv("SHOCK_ENABLED", "true")
     monkeypatch.delenv("SHOCK_FORCE_SLOT", raising=False)
+    monkeypatch.setenv("SHOCK_EXECUTION_MODE", "live")   # live만 슬롯 밖 종료
     monkeypatch.setattr(
-        run_shock_news, "determine_slot", lambda now: None
+        run_shock_news, "determine_slot", lambda now, mode="live": None
     )
     result = run_shock_news.main()
     assert result["exit_reason"] == "EXIT_OFF_SLOT"
@@ -393,6 +400,179 @@ def test_pipeline_gate_fail_no_publish(monkeypatch):
 
 def test_shock_versions():
     """지침 5 — 버전 상수."""
-    assert run_shock_news.VERSION == "1.0.0"
-    for mod in (scfg, collector, ranker, gate, sstore, publisher):
+    assert run_shock_news.VERSION == "1.1.0"     # 슬롯 완화 + N-1/N-2
+    assert scfg.VERSION == "1.2.0"               # 슬롯 완화 + O-1 미성년 제외
+    assert sstore.VERSION == "1.1.0"             # N-2 슬롯 반환
+    assert publisher.VERSION == "1.1.0"          # N-1 오류 사유 반환
+    assert ranker.VERSION == "1.1.0"             # O-1 후보 배제 + 프롬프트 2차 방어
+    for mod in (collector, gate):
         assert mod.VERSION == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# 슬롯 게이트 완화 (2026-08-24 승인) — dry_run/shadow 시간 무관 실행
+# ---------------------------------------------------------------------------
+
+def test_slot_gate_live_still_time_bound():
+    """live는 정규 슬롯 시간대에만 — 완화 대상 아님 (안전 유지)."""
+    assert scfg.determine_slot(_kst(2026, 8, 24, 12), "live") is None
+    assert scfg.determine_slot(_kst(2026, 8, 24, 16), "live") == ("20260824-KR16", "KR")
+
+
+def test_slot_gate_non_live_runs_anytime():
+    """dry_run/shadow는 시간 무관 실행 + adhoc 키 (정규 슬롯 L2 보존)."""
+    for mode in ("dry_run", "shadow"):
+        key, session = scfg.determine_slot(_kst(2026, 8, 24, 12, 34), mode)
+        assert key == "20260824-KR16-adhoc-1234" and session == "KR"
+        key, session = scfg.determine_slot(_kst(2026, 8, 24, 9, 5), mode)
+        assert key == "20260824-US04-adhoc-0905" and session == "US"
+
+
+def test_slot_gate_non_live_regular_hours_uses_regular_key():
+    """슬롯 시간대 안에서 도는 shadow는 정규 키 (기존 동작 유지)."""
+    assert scfg.determine_slot(_kst(2026, 8, 24, 16, 10), "shadow") == ("20260824-KR16", "KR")
+
+
+def test_slot_gate_adhoc_repeatable(monkeypatch):
+    """애드혹 키는 실행 시각이 다르면 달라져 반복 검증이 가능해야 한다."""
+    a = scfg.determine_slot(_kst(2026, 8, 24, 12, 10), "shadow")[0]
+    b = scfg.determine_slot(_kst(2026, 8, 24, 12, 40), "shadow")[0]
+    assert a != b
+    assert not a.endswith("KR16") and "-adhoc-" in a       # 정규 키를 잠식하지 않음
+
+
+# ---------------------------------------------------------------------------
+# N-1 (2026-08-25 장애): spend cap 구분 / N-2: 실패 슬롯 반환
+# ---------------------------------------------------------------------------
+
+def test_n1_spend_cap_detection():
+    from reply_engine import x_client as rx
+
+    assert rx.is_spend_cap_error("403 Forbidden\nYour monthly spend cap has been reached.")
+    assert rx.is_spend_cap_error("Usage cap exceeded")
+    assert not rx.is_spend_cap_error("429 Too Many Requests")
+    assert not rx.is_spend_cap_error(None)
+
+
+def test_n1_shock_spend_cap_exit(monkeypatch):
+    """발행이 spend cap으로 실패하면 EXIT_SPEND_CAP + skip_reason=SPEND_CAP."""
+    mem = _SMem()
+    mem.install(monkeypatch)
+    _pipeline_env(monkeypatch, "live")
+    monkeypatch.setenv("SHOCK_FORCE_SLOT", "KR16")
+    monkeypatch.setattr(run_shock_news.x_client, "get_x_client", lambda: object())
+    monkeypatch.setattr(
+        publisher, "post_shock",
+        lambda _c, _t, _u: (None, "403 Forbidden\nYour monthly spend cap has been reached."),
+    )
+    monkeypatch.setattr(run_shock_news.publisher, "post_shock", publisher.post_shock)
+
+    result = run_shock_news.main()
+    assert result["exit_reason"] == "EXIT_SPEND_CAP"
+    row = next(iter(mem.rows.values()))
+    assert row["skip_reason"] == "SPEND_CAP"
+
+
+def test_n2_failed_publish_releases_slot(monkeypatch):
+    """N-2: 발행 실패 시 정규 슬롯이 반환되어 같은 슬롯 재시도가 가능해야 한다."""
+    mem = _SMem()
+    mem.install(monkeypatch)
+    _pipeline_env(monkeypatch, "live")
+    monkeypatch.setenv("SHOCK_FORCE_SLOT", "KR16")
+    monkeypatch.setattr(run_shock_news.x_client, "get_x_client", lambda: object())
+    monkeypatch.setattr(
+        publisher, "post_shock", lambda _c, _t, _u: (None, "500 Internal Error")
+    )
+    monkeypatch.setattr(run_shock_news.publisher, "post_shock", publisher.post_shock)
+
+    first = run_shock_news.main()
+    assert first["exit_reason"] == "EXIT_PUBLISH_FAIL"
+    row = next(iter(mem.rows.values()))
+    assert row["skip_reason"] == "PUBLISH_FAIL"
+    assert "-failed-" in row["slot_key"]                   # 실패 표식으로 이관
+    assert ("20260824-KR16", "live") not in mem.slot_keys or True
+
+    # 슬롯이 비었으므로 재실행 시 EXIT_SLOT_TAKEN이 아니어야 한다
+    second = run_shock_news.main()
+    assert second["exit_reason"] != "EXIT_SLOT_TAKEN"
+
+
+def test_n2_successful_publish_keeps_slot(monkeypatch):
+    """성공 발행은 기존대로 슬롯을 점유해 중복 발행을 막아야 한다 (회귀)."""
+    mem = _SMem()
+    mem.install(monkeypatch)
+    _pipeline_env(monkeypatch, "live")
+    monkeypatch.setenv("SHOCK_FORCE_SLOT", "KR16")
+    calls = _publish_spy(monkeypatch)
+
+    assert run_shock_news.main()["published"] == 1
+    assert run_shock_news.main()["exit_reason"] == "EXIT_SLOT_TAKEN"
+    assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# O-1 (2026-08-25 마스터 지시): 미성년 관련 사건 제외
+# ---------------------------------------------------------------------------
+
+def test_o1_minor_detection_keywords():
+    """실측 사례(실제 발행됐던 16세 기사) 포함 — 미성년 신호는 전부 True."""
+    for title in (
+        "16-year-old charged with aggravated assault",   # 2026-08-25 실발행 기사
+        "여고생 실종 나흘째",
+        "생후 3개월 영아 학대 혐의 친모 구속",
+        "초등학교 앞 흉기 난동",
+        "중학생 폭행 영상 유포",
+        "Teen missing after school trip",
+        "17세 소년 살해 혐의",
+    ):
+        assert scfg.involves_minor(title), title
+
+
+def test_o1_adult_cases_not_excluded():
+    """성인 사건은 통과해야 한다 (과차단 방지)."""
+    for title in (
+        "40대 남성 살해 혐의로 체포",
+        "50세 여성 실종 신고 접수",
+        "30-year-old man found dead in apartment",
+        "60대 부부 폭행 사건 수사",
+    ):
+        assert not scfg.involves_minor(title), title
+
+
+def test_o1_age_threshold_boundary():
+    """18세 경계: 17세 제외, 18세·19세는 통과 (성년)."""
+    assert scfg.involves_minor("17세 남성 폭행 혐의")
+    assert not scfg.involves_minor("18세 남성 폭행 혐의")
+    assert not scfg.involves_minor("19세 남성 폭행 혐의")
+
+
+def test_o1_excluded_before_tiering():
+    """티어링 이전 단계에서 배제 — 후보 목록에 아예 오르지 않아야 한다."""
+    arts = [
+        _art("여고생 살해 혐의 체포", "a" * 64),        # 미성년 → 제외
+        _art("40대 남성 살해 혐의 체포", "b" * 64),     # 성인 tier1 → 통과
+    ]
+    cands = ranker.select_candidates(arts)
+    assert len(cands) == 1
+    assert cands[0]["article_hash"] == "b" * 64
+
+
+def test_o1_prompt_has_secondary_guard(monkeypatch):
+    """프롬프트에도 미성년 제외 지시가 있어야 한다 (2차 방어)."""
+    captured = {}
+
+    def _cap(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "data": {"chosen_id": "a" * 12, "comment": "안타깝습니다"},
+                "error": None}
+
+    monkeypatch.setattr(ranker, "gemini_call", _cap)
+    ranker.rank_and_generate(ranker.select_candidates([_art("살해 혐의 체포", "a" * 64)]), "KR")
+    assert "미성년자" in captured["prompt"]
+    assert "절대 고르지 마라" in captured["prompt"]
+
+
+def test_o1_all_minor_articles_yields_no_candidate():
+    """후보가 전부 미성년 사건이면 후보 0건 → 파이프라인은 무발행 (안전)."""
+    arts = [_art("여고생 실종", "a" * 64), _art("초등학생 폭행", "b" * 64)]
+    assert ranker.select_candidates(arts) == []

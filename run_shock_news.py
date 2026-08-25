@@ -37,7 +37,7 @@ from shock_news_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +93,12 @@ def main() -> dict:
         _write_report(summary)
         return summary
 
-    slot = determine_slot(now_kst)
+    slot = determine_slot(now_kst, mode)
     if slot is None:
-        logger.warning("[Step0] 슬롯 시간대 아님 — 종료 (KST 15~16시/03~04시만)")
+        logger.warning(
+            "[Step0] 슬롯 시간대 아님 — 종료 (live는 KST 15~16시/03~04시만. "
+            "dry_run/shadow는 시간 무관 실행)"
+        )
         summary["exit_reason"] = "EXIT_OFF_SLOT"
         _write_report(summary)
         return summary
@@ -219,7 +222,7 @@ def main() -> dict:
 
     # ── live: 슬롯 내 랜덤 분 대기 (안티봇) → 발행 (무재시도) ──
     if not guard.can_write():
-        sstore.mark_failed(chosen["article_hash"], "BUDGET_WRITE")
+        sstore.mark_failed(chosen["article_hash"], "BUDGET_WRITE", slot_key)
         summary["exit_reason"] = "EXIT_BUDGET_WRITE"
         rstore.upsert_budget(guard.row)
         _write_report(summary, guard)
@@ -231,13 +234,13 @@ def main() -> dict:
 
     client = x_client.get_x_client()
     if client is None:
-        sstore.mark_failed(chosen["article_hash"], "NO_CREDENTIALS")
+        sstore.mark_failed(chosen["article_hash"], "NO_CREDENTIALS", slot_key)
         summary["exit_reason"] = "EXIT_NO_CREDENTIALS"
         rstore.upsert_budget(guard.row)
         _write_report(summary, guard)
         return summary
 
-    tweet_id = publisher.post_shock(client, chosen["comment"], chosen["url"])
+    tweet_id, publish_error = publisher.post_shock(client, chosen["comment"], chosen["url"])
     guard.record_write()
     rstore.upsert_budget(guard.row)   # 발행마다 즉시 저장 (V-1 규약)
 
@@ -247,8 +250,17 @@ def main() -> dict:
         summary["success"] = True
         summary["exit_reason"] = "EXIT_OK"
     else:
-        sstore.mark_failed(chosen["article_hash"], "PUBLISH_FAIL")
-        summary["exit_reason"] = "EXIT_PUBLISH_FAIL"
+        # N-1: spend cap은 재시도로 풀리지 않는 플랫폼 사유 — 구분 보고
+        cap = x_client.is_spend_cap_error(publish_error)
+        reason = "SPEND_CAP" if cap else "PUBLISH_FAIL"
+        if cap:
+            logger.error(
+                "[Step9] X API 월간 지출 상한 도달 — 코드 문제 아님. "
+                "Developer Portal에서 spend cap 확인/상향 필요 (N-1)"
+            )
+        # N-2: 발행 실패 시 정규 슬롯 반환 (재시도 가능하게)
+        sstore.mark_failed(chosen["article_hash"], reason, slot_key)
+        summary["exit_reason"] = "EXIT_SPEND_CAP" if cap else "EXIT_PUBLISH_FAIL"
 
     logger.info(f"[ShockNews] 완료 | published={summary['published']}")
     _write_report(summary, guard)
@@ -257,5 +269,5 @@ def main() -> dict:
 
 if __name__ == "__main__":
     result = main()
-    fail = {"EXIT_NO_CREDENTIALS", "EXIT_RANK_FAIL", "EXIT_PUBLISH_FAIL"}
+    fail = {"EXIT_NO_CREDENTIALS", "EXIT_RANK_FAIL", "EXIT_PUBLISH_FAIL", "EXIT_SPEND_CAP"}
     sys.exit(1 if result.get("exit_reason") in fail else 0)

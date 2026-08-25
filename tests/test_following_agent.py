@@ -414,9 +414,9 @@ def test_following_versions():
     from following_engine import prefilter as p
     from following_engine import store as s
 
-    assert run_following.VERSION == "1.0.1"   # T-4 사유 보존
+    assert run_following.VERSION == "1.1.0"   # T-4 사유 보존
     assert config.VERSION == "1.0.2"   # T-4 REVIEW_MIN_RELEVANCE
-    assert a.VERSION == "1.0.1"        # J-1 (응답 잘림) 수정 반영
+    assert a.VERSION == "1.1.0"        # J-1 잘림 + L-1 별칭 매핑
     assert p.VERSION == "1.0.1"        # K-1 (RT 유입 차단) 수정 반영
     assert d.VERSION == "1.1.0"        # T-4 near-miss REVIEW_ONLY
     for mod in (c, e, s):
@@ -520,7 +520,7 @@ def test_j1_prompt_slimming(monkeypatch):
 def test_j1_version_bumped():
     from following_engine import analyzer as fan
 
-    assert fan.VERSION == "1.0.1"
+    assert fan.VERSION == "1.1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -622,3 +622,115 @@ def test_t4_e2e_review_only_never_publishes_keeps_text(monkeypatch):
     assert row["skip_reason"] == "NEAR_MISS_SCORE"
     assert row["generated_text"] == "공급망 데이터가 흥미롭습니다"
     assert row["would_execute"] is False
+
+
+# ---------------------------------------------------------------------------
+# L-1 (2026-08-24 실사고): 19자리 트윗 ID 훼손 → SKIP_AI_FAIL 유실
+# ---------------------------------------------------------------------------
+
+_REAL_IDS = [
+    "2091850341520454132", "2091850341520454133",
+    "2091850341520454134", "2091850341520454135",
+]
+
+
+def _l1_items():
+    return [
+        {"id": pid, "author": "acct", "metrics": {"likes": 3},
+         "text": "반도체 공급망 데이터 분석 게시물 본문 " * 3}
+        for pid in _REAL_IDS
+    ]
+
+
+def _l1_row(rid, action="SKIP"):
+    return {"id": rid, "relevant": True, "category": "SEMICONDUCTOR",
+            "relevanceScore": 80, "importanceScore": 80, "engagementValue": 70,
+            "contentValue": 80, "summary": "요약", "recommendedAction": action,
+            "reason": "근거", "generatedText": "데이터가 흥미롭습니다"}
+
+
+def test_l1_prompt_uses_short_aliases(monkeypatch):
+    """프롬프트에 19자리 원 ID가 아니라 p1/p2 별칭이 들어가야 한다."""
+    from following_engine import analyzer as fan
+
+    captured = {}
+
+    def _cap(**kwargs):
+        captured.update(kwargs)
+        return {"success": True, "data": [], "error": None}
+
+    monkeypatch.setattr(fan, "gemini_call", _cap)
+    fan.analyze_batch(_l1_items())
+    prompt = captured["prompt"]
+    assert "- id: p1 |" in prompt and "- id: p4 |" in prompt
+    assert _REAL_IDS[0] not in prompt          # 원 ID 노출 없음 (훼손 여지 제거)
+    assert "변형 금지" in prompt
+
+
+def test_l1_alias_roundtrip_recovers_all(monkeypatch):
+    """실사고 재현: 응답이 별칭으로 오면 4건 전부 원 post_id로 매칭돼야 한다."""
+    from following_engine import analyzer as fan
+
+    monkeypatch.setattr(
+        fan, "gemini_call",
+        lambda **_k: {"success": True,
+                      "data": [_l1_row(f"p{i}") for i in range(1, 5)],
+                      "error": None},
+    )
+    result = fan.analyze_batch(_l1_items())
+    assert set(result.keys()) == set(_REAL_IDS)   # 유실 0건 (기존: 3건 유실)
+
+
+def test_l1_corrupted_id_excluded_not_misassigned(monkeypatch):
+    """훼손된 id는 조용히 버려질 뿐, 다른 게시물에 잘못 배정되면 안 된다."""
+    from following_engine import analyzer as fan
+
+    monkeypatch.setattr(
+        fan, "gemini_call",
+        lambda **_k: {"success": True,
+                      "data": [_l1_row("p1"), _l1_row("2091850341520454000")],  # 2번째 훼손
+                      "error": None},
+    )
+    result = fan.analyze_batch(_l1_items())
+    assert list(result.keys()) == [_REAL_IDS[0]]
+
+
+def test_l1_raw_id_response_still_accepted(monkeypatch):
+    """모델이 원 ID를 정확히 반환하는 경우도 하위호환으로 수용."""
+    from following_engine import analyzer as fan
+
+    monkeypatch.setattr(
+        fan, "gemini_call",
+        lambda **_k: {"success": True, "data": [_l1_row(_REAL_IDS[1])], "error": None},
+    )
+    result = fan.analyze_batch(_l1_items())
+    assert list(result.keys()) == [_REAL_IDS[1]]
+
+
+def test_l1_alias_independent_per_chunk(monkeypatch):
+    """chunk 분할(J-1)과 결합: chunk마다 p1부터 재부여되어도 매핑이 섞이지 않아야 한다."""
+    from following_engine import analyzer as fan
+
+    items = [
+        {"id": f"20918503415204{500 + n}", "author": "a", "metrics": {},
+         "text": "반도체 데이터 " * 10}
+        for n in range(15)                      # 10 + 5 두 chunk
+    ]
+
+    def _echo(**kwargs):
+        aliases = [
+            line.split("|")[0].split(":")[1].strip()
+            for line in kwargs["prompt"].splitlines() if line.startswith("- id:")
+        ]
+        return {"success": True, "data": [_l1_row(a) for a in aliases], "error": None}
+
+    monkeypatch.setattr(fan, "gemini_call", _echo)
+    result = fan.analyze_batch(items)
+    assert set(result.keys()) == {i["id"] for i in items}
+    assert len(result) == 15
+
+
+def test_l1_version_bumped():
+    from following_engine import analyzer as fan
+
+    assert fan.VERSION == "1.1.0"

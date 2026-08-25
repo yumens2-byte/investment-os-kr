@@ -24,7 +24,7 @@ import tweepy
 
 from reply_engine.config import MENTIONS_MAX_RESULTS
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -181,3 +181,17 @@ def fetch_conversation_roots(
 
     logger.info(f"[XClient] 대화 루트 조회 {len(ids)}건 요청 → {len(roots)}건 확인")
     return roots
+
+
+# ── N-1 (2026-08-25): X 플랫폼 회복 불가 오류 판별 ──────────────
+# 2026-08-25 장애: 월간 spend cap 도달로 3개 엔진 X 호출이 동시 403.
+# 일반 실패와 구분해 종료 코드를 분리한다 (진단 지연 방지 — 재시도로 풀리지 않음).
+_SPEND_CAP_MARKERS = ("spend cap", "monthly spend", "usage cap")
+
+
+def is_spend_cap_error(error_text: str | None) -> bool:
+    """X API 응답 문자열이 월간 지출 상한(회복 불가) 사유인지 판별."""
+    if not error_text:
+        return False
+    lowered = str(error_text).lower()
+    return any(marker in lowered for marker in _SPEND_CAP_MARKERS)

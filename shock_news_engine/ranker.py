@@ -18,9 +18,10 @@ from shock_news_engine.config import (
     ENGAGE_PROMPT_RATE,
     RANK_CANDIDATE_LIMIT,
     TIER_KEYWORDS,
+    involves_minor,
 )
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ def select_candidates(articles: list[dict]) -> list[dict]:
     """티어 부여 → (티어 asc, 발행시각 desc) 정렬 상위 RANK_CANDIDATE_LIMIT."""
     tiered = []
     for art in articles:
+        if involves_minor(art["title"]):
+            # O-1 (2026-08-25): 미성년 관련 사건은 후보 단계에서 배제 (계정 리스크)
+            logger.info(f"[SRanker] 미성년 관련 제외: '{art['title'][:50]}'")
+            continue
         tier = assign_tier(art["title"])
         if tier is None:
             continue
@@ -92,11 +97,13 @@ def rank_and_generate(candidates: list[dict], session: str) -> dict | None:
         "댓글을 많이 달 만한 기사 1건을 고르고, 그 기사에 대한 놀람 코멘트를 작성하라.\n"
         "코멘트 규칙:\n"
         f"1. 한국어 2~3문장, 공백 포함 {COMMENT_MAX_LENGTH}자 이내\n"
-        "2. 절대 금지: 사람 실명·이니셜·나이 언급, 유죄 단정 표현"
+        "2. 미성년자(만 18세 미만)가 피해자·피의자로 등장하는 기사는 절대 고르지 마라. "
+        "해당 기사만 있으면 tier가 낮은 다른 기사를 골라라\n"
+        "3. 절대 금지: 사람 실명·이니셜·나이 언급, 유죄 단정 표현"
         "('살해했다'식 단정 금지 — '혐의', '~로 알려졌다'만 허용), "
         "잔혹한 상세 묘사, 해시태그, 링크, 조롱·혐오 표현\n"
-        "3. 놀람과 안타까움 위주의 자연스러운 사람 말투, 이모지 최대 1개\n"
-        f"4. {engage_rule}\n\n"
+        "4. 놀람과 안타까움 위주의 자연스러운 사람 말투, 이모지 최대 1개\n"
+        f"5. {engage_rule}\n\n"
         f"{lines}\n\n"
         '반드시 JSON만 응답: {"chosen_id": "...", "comment": "..."}'
     )

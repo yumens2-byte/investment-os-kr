@@ -47,7 +47,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -163,7 +163,15 @@ def main() -> dict:
     fetched = x_client.fetch_mentions(client, my_user_id, since_id)
     guard.record_read()
     if not fetched["success"]:
-        summary["exit_reason"] = "EXIT_FETCH_FAIL"
+        # N-1 (2026-08-25): 월간 지출 상한은 재시도로 풀리지 않는 플랫폼 사유 — 구분 보고
+        if x_client.is_spend_cap_error(fetched.get("error")):
+            logger.error(
+                "[Step3] X API 월간 지출 상한 도달 — 코드 문제 아님. "
+                "Developer Portal에서 spend cap 확인/상향 필요 (N-1)"
+            )
+            summary["exit_reason"] = "EXIT_SPEND_CAP"
+        else:
+            summary["exit_reason"] = "EXIT_FETCH_FAIL"
         if db_write_allowed:
             store.upsert_budget(guard.row)
         _write_report(summary, guard)

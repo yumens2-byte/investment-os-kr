@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from db.supabase_client import get_client
 from shock_news_engine.config import RECENT_TITLE_DAYS
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +80,20 @@ def mark_posted(article_hash: str, tweet_id: str) -> None:
         logger.error(f"[SStore] mark_posted 실패 (발행-기록 불일치 — 수동 확인 필요): {exc}")
 
 
-def mark_failed(article_hash: str, reason: str) -> None:
+def mark_failed(article_hash: str, reason: str, slot_key: str | None = None) -> None:
+    """
+    실패 기록. N-2 (2026-08-25): 발행 실패 시 slot_key를 실패 표식으로 이관해
+    정규 슬롯을 비운다 — 발행되지 않은 슬롯이 소모되는 문제 해소 (2026-08-25 KR16 사고).
+    감사 기록은 그대로 남고, 동일 기사 재발행은 L1(article_hash PK)이 계속 차단한다.
+    """
+    payload: dict = {"skip_reason": reason}
+    if slot_key:
+        stamp = datetime.now(UTC).strftime("%H%M%S")
+        payload["slot_key"] = f"{slot_key}-failed-{stamp}"
     try:
         (
             get_client().table(TABLE)
-            .update({"skip_reason": reason})
+            .update(payload)
             .eq("article_hash", article_hash).execute()
         )
     except Exception as exc:
