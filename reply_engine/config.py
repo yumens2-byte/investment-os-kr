@@ -59,7 +59,7 @@ PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 # ---------------------------------------------------------------------------
 # 수집 설정
 # ---------------------------------------------------------------------------
-MENTIONS_MAX_RESULTS: int = 50      # get_users_mentions 1콜 수집량 (5~100)
+MENTIONS_MAX_RESULTS: int = 10      # get_users_mentions 1콜 수집량 (5~100)
 
 # ---------------------------------------------------------------------------
 # 예산 count 모드 fallback 상한 (단가 미설정 시)
