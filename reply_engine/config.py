@@ -59,14 +59,14 @@ PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 # ---------------------------------------------------------------------------
 # 수집 설정
 # ---------------------------------------------------------------------------
-MENTIONS_MAX_RESULTS: int = 10      # get_users_mentions 1콜 수집량 (5~100)
+MENTIONS_MAX_RESULTS: int = 5      # get_users_mentions 1콜 수집량 (5~100)
 
 # ---------------------------------------------------------------------------
 # 예산 count 모드 fallback 상한 (단가 미설정 시)
 # ---------------------------------------------------------------------------
 # reply(멘션1+루트1)×4회 + following(타임라인1)×2회 + 여유 (2026-08-20 Q4 승인)
-FALLBACK_READ_CALLS_PER_DAY: int = 16
-FALLBACK_WRITE_CALLS_PER_DAY: int = 5
+FALLBACK_READ_CALLS_PER_DAY: int = 50
+FALLBACK_WRITE_CALLS_PER_DAY: int = 50
 
 # ---------------------------------------------------------------------------
 # 금지어 — 답글에 포함 시 발행 차단 (생성 오작동 신호로 간주)
