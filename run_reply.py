@@ -47,7 +47,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -99,7 +99,7 @@ def main() -> dict:
         "candidates": 0,
         "published": 0,
         "skip_reasons": {},
-        "review": [],   # C-3: 건별 품질 검수 배열 (댓글/라벨/답글/결과)
+        "review": [],   # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -252,6 +252,16 @@ def main() -> dict:
                 pass_items.append({**tweet, "label": label})
             else:
                 _skip(tweet["id"], f"CLASS_{label}")
+                # C-4 (v1.2.1, 2026-08-27): 분류 스킵 건도 review에 기록 —
+                # artifact만으로 분류 품질(오판 여부) 검수 가능하게 함.
+                # 스키마는 기존 review_entry와 동일 (reply_text 없음 → None).
+                summary["review"].append({
+                    "reply_tweet_id": tweet["id"],
+                    "comment_preview": tweet["text"][:100],
+                    "label": label,
+                    "reply_text": None,
+                    "result": f"CLASS_{label}",
+                })
 
     logger.info(f"[Step4] 분류 통과 {len(pass_items)}건")
 

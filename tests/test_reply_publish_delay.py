@@ -127,5 +127,5 @@ def test_v1_budget_saved_per_write(monkeypatch):
 
 def test_versions_bumped_d_series():
     """D-1/V-1 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.2.0"
+    assert run_reply.VERSION == "1.2.1"
     assert config.VERSION == "1.0.6"
