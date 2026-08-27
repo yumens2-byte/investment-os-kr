@@ -105,6 +105,8 @@ jobs:
           # 운영 제어 (GitHub Variables — HG-1/HG-3)
           REPLY_ENABLED:          ${{ vars.REPLY_ENABLED }}
           REPLY_MODE:             ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
+          # v1.0.6 (2026-08-27): 일일 답글 상한 운영값 — 미등록 시 코드 기본값 8 (env_int 안전 파서)
+          REPLY_DAILY_CAP:        ${{ vars.REPLY_DAILY_CAP }}
           DAILY_BUDGET_KRW:       ${{ vars.DAILY_BUDGET_KRW }}
           X_READ_COST_KRW:        ${{ vars.X_READ_COST_KRW }}
           X_WRITE_COST_KRW:       ${{ vars.X_WRITE_COST_KRW }}
