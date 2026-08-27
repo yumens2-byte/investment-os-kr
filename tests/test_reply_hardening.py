@@ -152,5 +152,5 @@ def test_versions_bumped_b_series():
     from reply_engine import budget as budget_mod
 
     assert run_reply.VERSION == "1.2.0"
-    assert config.VERSION == "1.0.5"
+    assert config.VERSION == "1.0.6"
     assert budget_mod.VERSION == "1.0.1"
