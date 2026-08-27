@@ -35,7 +35,7 @@ def env_int(name: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
 # ---------------------------------------------------------------------------
-REPLY_DAILY_CAP: int = env_int("REPLY_DAILY_CAP", 8)          # 일일 답글 상한
+REPLY_DAILY_CAP: int = env_int("REPLY_DAILY_CAP", 50)          # 일일 답글 상한
 REPLY_AUTHOR_DAILY_CAP: int = env_int("REPLY_AUTHOR_DAILY_CAP", 1)  # 사용자별/일
 REPLY_CONV_DAILY_CAP: int = env_int("REPLY_CONV_DAILY_CAP", 3)      # 대화별/일
 REPLY_MAX_AGE_HOURS: int = env_int("REPLY_MAX_AGE_HOURS", 24)  # 폐기 (승인 D)
