@@ -27,6 +27,10 @@ v1.3.0 (2026-08-30, R-2/R-3/R-5):
       실사고: 동일 저자 2건 발행 (REPLY_AUTHOR_DAILY_CAP=1 위반).
   R-3 수집 포화 관측 — summary에 collection_saturated / oldest_id 기록.
   R-5 배치 조회 — 정적 필터 통과분으로 CapContext 1회 구성 (DB 3쿼리 고정).
+
+v1.4.0 (2026-08-30, R-9):
+  외국어 댓글은 AI 생성 대신 정형 문구를 사용한다 (마스터 확정 C안).
+  AI 생성 대상이 0건이면 Gemini 호출이 없으므로 예산 계상도 하지 않는다.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from reply_engine import budget as budget_mod
-from reply_engine import classifier, gate, generator, store, x_client
+from reply_engine import classifier, gate, generator, lang, store, x_client
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     PUBLISH_JITTER_MAX_SEC,
@@ -56,7 +60,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -108,6 +112,7 @@ def main() -> dict:
         "collection_saturated": False,   # R-3: 수집 상한 포화 (미수집분 존재 가능)
         "oldest_id": None,               # R-3: 유실 구간 사후 추적용
         "candidates": 0,
+        "non_kr_replies": 0,      # R-9: 정형 문구로 처리된 외국어 건수
         "published": 0,
         "skip_reasons": {},
         "review": [],   # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
@@ -291,10 +296,18 @@ def main() -> dict:
     # ── Step 5: 생성 ──────────────────────────────────────────
     replies: dict[str, str] = {}
     if pass_items:
+        # R-9: 외국어 건은 generator가 정형 문구로 처리하므로 Gemini 호출 대상이 아니다.
+        #      AI 대상이 0건이면 실제 호출이 없으므로 예산도 계상하지 않는다.
+        non_kr_ids = [t["id"] for t in pass_items if lang.is_non_korean(t["text"])]
+        summary["non_kr_replies"] = len(non_kr_ids)
+
         replies = generator.generate_batch(
             [{"id": t["id"], "text": t["text"], "label": t["label"]} for t in pass_items]
         )
-        guard.record_gemini()
+        if len(non_kr_ids) < len(pass_items):
+            guard.record_gemini()
+        else:
+            logger.info("[Step5] 전건 외국어 — Gemini 생성 호출 없음 (R-9)")
 
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
@@ -363,6 +376,7 @@ def main() -> dict:
             "comment_preview": tweet["text"][:100],
             "label": tweet["label"],
             "reply_text": reply_text,
+            "source": "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI",
             "result": None,
         }
         summary["review"].append(review_entry)
