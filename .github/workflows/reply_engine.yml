@@ -25,7 +25,7 @@ on:
         description: "실행 모드 (미지정 시 vars.REPLY_MODE)"
         type: choice
         options: [dry_run, shadow, live]
-        default: dry_run
+        default: live
 
 # L3 가드: cron + dispatch 동시 실행 차단 (중복 답글 방지)
 concurrency:
