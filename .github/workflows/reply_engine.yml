@@ -104,7 +104,7 @@ jobs:
 
           # 운영 제어 (GitHub Variables — HG-1/HG-3)
           REPLY_ENABLED:          ${{ vars.REPLY_ENABLED }}
-          REPLY_MODE:             ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
+          REPLY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || vars.REPLY_MODE || 'dry_run' }}
           # v1.0.6 (2026-08-27): 일일 답글 상한 운영값 — 미등록 시 코드 기본값 8 (env_int 안전 파서)
           REPLY_DAILY_CAP:        ${{ vars.REPLY_DAILY_CAP }}
           # R-패치 (2026-08-30): 아래 3개는 기존에 배선이 없어 코드 기본값으로 고정돼 있었다.
