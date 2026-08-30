@@ -15,6 +15,13 @@ Supabase 영속화 레이어.
   live    — 전부 O
 
 일 경계: KST (UTC+9 고정, DST 없음).
+
+v1.1.0 (2026-08-30, R-5): 배치 조회 3종 신설 (history_exists_bulk,
+  count_author_responded_today_bulk, count_conversation_responded_today_bulk).
+  기존 단건 함수는 하위호환·비상 경로로 유지한다.
+  사유: 후보 N건 × 3쿼리 순차 실행 구조가 MENTIONS_MAX_RESULTS 100 상향 시
+  최대 300쿼리로 선형 폭증. 배치 전환으로 3쿼리 고정.
+  실패 정책은 단건과 동일하게 보수적(확인 불가 = 발행 금지)으로 유지한다.
 """
 
 from __future__ import annotations
@@ -24,7 +31,7 @@ from datetime import UTC, datetime, timedelta
 
 from db.supabase_client import get_client
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +163,93 @@ def count_conversation_responded_today(conversation_id: str) -> int:
 def count_responded_today() -> int:
     """일일 답글 상한 체크용 총 발행 수."""
     return _count_today("", "", responded_only=True)
+
+
+# ---------------------------------------------------------------------------
+# 배치 조회 (R-5) — postgrest 2.31.0 `in_(column, values)` 검증 완료
+# ---------------------------------------------------------------------------
+
+# in_()는 값을 URL 쿼리스트링에 직렬화하므로 과도한 길이를 피해 분할 조회한다.
+_IN_CHUNK_SIZE = 50
+
+
+def _chunks(items: list[str], size: int = _IN_CHUNK_SIZE):
+    """리스트를 size 단위로 분할 (URL 길이 안전장치)."""
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def history_exists_bulk(reply_tweet_ids: list[str]) -> set[str]:
+    """
+    L1 배치 가드: 이미 처리 이력이 있는 reply_tweet_id 집합.
+
+    조회 실패 시 전건 '존재'로 반환한다 — 확인 불가면 발행하지 않는 보수적 처리
+    (단건 history_exists의 True 반환과 동일 정책).
+    """
+    ids = [i for i in dict.fromkeys(reply_tweet_ids) if i]
+    if not ids:
+        return set()
+
+    found: set[str] = set()
+    try:
+        for chunk in _chunks(ids):
+            result = (
+                get_client()
+                .table(_T_HISTORY)
+                .select("reply_tweet_id")
+                .in_("reply_tweet_id", chunk)
+                .execute()
+            )
+            found |= {
+                row["reply_tweet_id"]
+                for row in (result.data or [])
+                if row.get("reply_tweet_id")
+            }
+    except Exception as exc:
+        logger.error(f"[Store] history_exists_bulk 실패 → 전건 DUP 처리: {exc}")
+        return set(ids)
+    return found
+
+
+def _count_today_bulk(column: str, values: list[str]) -> dict[str, int]:
+    """
+    당일(KST) responded=True 이력을 컬럼값별로 집계.
+    조회 실패 시 전건 큰 값 반환 (보수적 차단 — _count_today와 동일 정책).
+    """
+    keys = [v for v in dict.fromkeys(values) if v]
+    if not keys:
+        return {}
+
+    counts: dict[str, int] = {}
+    try:
+        for chunk in _chunks(keys):
+            result = (
+                get_client()
+                .table(_T_HISTORY)
+                .select(column)
+                .gte("created_at", kst_day_start_utc_iso())
+                .eq("responded", True)
+                .in_(column, chunk)
+                .execute()
+            )
+            for row in (result.data or []):
+                key = row.get(column)
+                if key:
+                    counts[key] = counts.get(key, 0) + 1
+    except Exception as exc:
+        logger.error(f"[Store] _count_today_bulk 실패 ({column}) → 보수 차단: {exc}")
+        return {k: 10**9 for k in keys}
+    return counts
+
+
+def count_author_responded_today_bulk(author_ids: list[str]) -> dict[str, int]:
+    """L4 배치: 저자별 당일 발행 수."""
+    return _count_today_bulk("author_id", author_ids)
+
+
+def count_conversation_responded_today_bulk(conversation_ids: list[str]) -> dict[str, int]:
+    """L5 배치: 대화별 당일 발행 수."""
+    return _count_today_bulk("conversation_id", conversation_ids)
 
 
 def get_recent_response_texts(limit: int = 30) -> list[str]:

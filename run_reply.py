@@ -20,6 +20,13 @@ X Reply Engine — 메인 파이프라인 (v1.0.0)
 [중복 방지 6층]
   L1 history PK / L2 Supabase 커서 / L3 yml concurrency /
   L4 사용자 상한 / L5 대화 상한 / L6 텍스트 유사도
+
+v1.3.0 (2026-08-30, R-2/R-3/R-5):
+  R-2 캡 이중 계수 — Step3 승인 시 CapContext in-run 카운터 점유,
+      발행 루프에서 실발행 기준 2차 캡 재검증 (심층 방어).
+      실사고: 동일 저자 2건 발행 (REPLY_AUTHOR_DAILY_CAP=1 위반).
+  R-3 수집 포화 관측 — summary에 collection_saturated / oldest_id 기록.
+  R-5 배치 조회 — 정적 필터 통과분으로 CapContext 1회 구성 (DB 3쿼리 고정).
 """
 
 from __future__ import annotations
@@ -39,6 +46,8 @@ from reply_engine.config import (
     PUBLISH_JITTER_MAX_SEC,
     PUBLISH_JITTER_MIN_SEC,
     PUBLISH_START_DELAY_MAX_SEC,
+    REPLY_AUTHOR_DAILY_CAP,
+    REPLY_CONV_DAILY_CAP,
     REPLY_DAILY_CAP,
     REPLY_RECENT_COMPARE_COUNT,
     STARTUP_JITTER_MAX_SEC,
@@ -47,7 +56,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -96,6 +105,8 @@ def main() -> dict:
         "success": False,
         "exit_reason": None,
         "collected": 0,
+        "collection_saturated": False,   # R-3: 수집 상한 포화 (미수집분 존재 가능)
+        "oldest_id": None,               # R-3: 유실 구간 사후 추적용
         "candidates": 0,
         "published": 0,
         "skip_reasons": {},
@@ -180,6 +191,8 @@ def main() -> dict:
     tweets = fetched["tweets"]
     users = fetched["users"]
     summary["collected"] = len(tweets)
+    summary["collection_saturated"] = bool(fetched.get("saturated", False))   # R-3
+    summary["oldest_id"] = fetched.get("oldest_id")
     logger.info(f"[Step2] 수집 {len(tweets)}건")
 
     # 커서 전진 (L2) — dry_run은 미전진
@@ -196,7 +209,10 @@ def main() -> dict:
 
     # ── Step 3: 필터 ──────────────────────────────────────────
     blacklist = store.get_blacklist_ids()
-    candidates: list[dict] = []
+
+    # R-5: 정적 필터를 먼저 통과시킨 뒤 배치 스냅샷을 1회 구성 (DB 3쿼리 고정).
+    # 기존에는 후보 N건 × 3쿼리 순차 실행이었다.
+    static_ok: list[dict] = []
     for tweet in tweets:
         passed, reason = filter_mod.check_tweet(
             tweet, users.get(tweet["author_id"]), my_user_id, blacklist
@@ -204,7 +220,14 @@ def main() -> dict:
         if not passed:
             _skip(tweet["id"], reason)
             continue
-        passed, reason = filter_mod.check_caps_and_dup(tweet)
+        static_ok.append(tweet)
+
+    cap_ctx = filter_mod.build_cap_context(static_ok) if static_ok else None
+
+    # R-2: check_and_admit은 통과 시 in-run 카운터를 점유한다 (부수효과).
+    candidates: list[dict] = []
+    for tweet in static_ok:
+        passed, reason = filter_mod.check_and_admit(tweet, cap_ctx)
         if not passed:
             _skip(tweet["id"], reason)
             continue
@@ -277,16 +300,26 @@ def main() -> dict:
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
     responded_today = store.count_responded_today()
     published_this_run = 0
+    # R-2: 실발행 기준 2차 캡. Step3 승인 시점에 이미 상한이 걸리지만,
+    # 게이트 탈락·발행 실패로 승인≠발행이 되는 경로가 있어 심층 방어로 재계수한다.
+    published_author_run: dict[str, int] = {}
+    published_conv_run: dict[str, int] = {}
     first_publish_delayed = False   # 첫 발행 직전 1회 랜덤 딜레이 (안티봇, 2026-08-17)
 
     for idx, tweet in enumerate(pass_items):
         tweet_id = tweet["id"]
+        author_id = tweet["author_id"]
+        conversation_id = tweet["conversation_id"]
         reply_text = (replies.get(tweet_id) or "").strip()
 
-        # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — R-2 감사추적)
+        # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
         skip_reason: str | None = None
         if responded_today + published_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
+        elif published_author_run.get(author_id, 0) >= REPLY_AUTHOR_DAILY_CAP:
+            skip_reason = "AUTHOR_CAP_RUN"      # R-2 2차 방어선
+        elif published_conv_run.get(conversation_id, 0) >= REPLY_CONV_DAILY_CAP:
+            skip_reason = "CONV_CAP_RUN"        # R-2 2차 방어선
         else:
             gate_ok, gate_reason = gate.check_reply(
                 reply_text, recent_texts, comment_text=tweet["text"]
@@ -312,9 +345,9 @@ def main() -> dict:
         # 이력 기록 (L1) — dry_run은 DB 쓰기 금지
         record = {
             "reply_tweet_id": tweet_id,
-            "conversation_id": tweet["conversation_id"],
-            "author_id": tweet["author_id"],
-            "author_username": users.get(tweet["author_id"], {}).get("username", ""),
+            "conversation_id": conversation_id,
+            "author_id": author_id,
+            "author_username": users.get(author_id, {}).get("username", ""),
             "comment_text": tweet["text"][:500],
             "classification": tweet["label"],
             "responded": False,
@@ -351,6 +384,9 @@ def main() -> dict:
             review_entry["result"] = "SIMULATED"
             recent_texts.append(reply_text)
             published_this_run += 1
+            # R-2: shadow에서도 캡이 실동작해야 검수가 유효하다
+            published_author_run[author_id] = published_author_run.get(author_id, 0) + 1
+            published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
             continue
 
         # live: 첫 발행 직전 랜덤 딜레이 0~PUBLISH_START_DELAY_MAX_SEC (안티봇)
@@ -371,6 +407,9 @@ def main() -> dict:
             review_entry["result"] = "PUBLISHED"
             recent_texts.append(reply_text)
             published_this_run += 1
+            # R-2: 실발행 기준 캡 계수 (동일 저자·대화 중복 발행 차단)
+            published_author_run[author_id] = published_author_run.get(author_id, 0) + 1
+            published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
         else:
             store.update_skip_reason(tweet_id, "PUBLISH_FAIL")  # 사유 사후 기록 (R-2)
             review_entry["result"] = "PUBLISH_FAIL"

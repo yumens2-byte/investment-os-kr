@@ -14,13 +14,18 @@ X Reply Engine 설정 상수 (config/settings.py 무수정 원칙 — 독립 관
 v1.0.6 (2026-08-27): 정책 상수 원복 — 운영 상한 변경은 코드가 아닌
   GitHub Variables(REPLY_DAILY_CAP)로 관리 (테스트 게이트 6건 실패 원인 해소).
   FALLBACK 상수는 단가 미설정 시 비상 보수 경로이므로 저상한(16/5) 유지.
+
+v1.1.0 (2026-08-30, R-3): 멘션 수집 상한을 API 하한 5 → 상한 100으로 상향.
+  읽기 콜 수는 max_results와 무관하게 1콜이므로 예산 영향 0.
+  실측(08-30 artifact) collected=5 = 상한 포화 → 초과분이 커서 전진으로 영구 소실.
+  범위 밖 변수 오입력이 X API 400을 유발하지 않도록 env_int_clamped 도입.
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "1.0.6"
+VERSION = "1.1.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -36,6 +41,19 @@ def env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def env_int_clamped(name: str, default: int, lo: int, hi: int) -> int:
+    """
+    범위 강제 int 환경변수 파서 (R-3, 2026-08-30).
+    API 허용 범위를 벗어난 변수 오입력이 런타임 400을 유발하는 것을 차단한다.
+    범위 밖 값은 조용히 잘라내지 않고 기본값으로 되돌린다 (오입력 은폐 방지).
+    """
+    value = env_int(name, default)
+    if value < lo or value > hi:
+        return default
+    return value
+
 
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
@@ -64,7 +82,10 @@ PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 # ---------------------------------------------------------------------------
 # 수집 설정
 # ---------------------------------------------------------------------------
-MENTIONS_MAX_RESULTS: int = 5      # get_users_mentions 1콜 수집량 (5~100)
+# R-3 (2026-08-30): 5(API 하한) → 100(API 상한).
+# get_users_mentions는 max_results와 무관하게 읽기 1콜이므로 예산 증분 0.
+# 범위 밖 변수는 env_int_clamped가 기본값으로 되돌린다 (X API 400 차단).
+MENTIONS_MAX_RESULTS: int = env_int_clamped("REPLY_MENTIONS_MAX_RESULTS", 100, 5, 100)
 
 # ---------------------------------------------------------------------------
 # 예산 count 모드 fallback 상한 (단가 미설정 시)

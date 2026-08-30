@@ -11,6 +11,12 @@ reply_engine/classifier.py
 2단계:
   1차 룰: 명백한 긍정/부정/질문을 AI 호출 없이 확정 (비용 절약)
   2차 AI: 잔여 건만 Gemini flash-lite 배치 1콜 (JSON) — 실패 시 전건 AMBIGUOUS
+
+v1.1.0 (2026-08-30, R-4): 룰 판정 순서 보정.
+  기존에는 '?' 존재만으로 QUESTION을 선점해 감탄형 반응이 전량 무응답 처리됐다.
+  실사고(08-30 artifact): "오호? 👍" → 👍가 _POSITIVE_MARKERS에 있음에도
+  QUESTION 확정되어 스킵. '?'를 질문의 충분조건에서 제외하고
+  의문 어미/의문사를 1차 기준으로 승격한다.
 """
 
 from __future__ import annotations
@@ -20,7 +26,7 @@ import re
 
 from core.gemini_gateway import call as gemini_call
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -39,23 +45,48 @@ _NEGATIVE_MARKERS: tuple[str, ...] = (
     "틀렸", "별로", "사기", "거짓", "엉터리", "쓰레기", "허접", "실망",
 )
 
-_QUESTION_PATTERN = re.compile(
-    r"\?|？|(인가요|일까요|건가요|나요|까요|어떻게|왜|뭔가요|뭐예요)\s*$"
+# R-4: 의문 어미/의문사 — 이것만으로 QUESTION 확정 (문말 한정 없이 탐색)
+# 주의: 어간 활용형을 포괄하려면 '인가요'가 아니라 '가요'로 잡아야 한다.
+# ('유익한가요'는 인가요/건가요 어느 쪽에도 매칭되지 않는다 — 초기 설계 오류)
+# '가요' 오탐(가요계 등)은 QUESTION=무응답이라 안전한 방향이므로 감수한다.
+_INTERROGATIVE_PATTERN = re.compile(
+    r"(가요|까요|나요|어떻게|어떤|왜|언제|얼마|어디|뭐예요)"
 )
+
+# R-4: '?' 단독 — 감탄형("오호?", "대박?")과 질문을 구분하지 못하므로 보조 신호로만 사용
+_QUESTION_MARK_PATTERN = re.compile(r"[?？]")
+
+# 하위호환: 기존 이름 참조처 보존 (판정에는 사용하지 않음)
+_QUESTION_PATTERN = _INTERROGATIVE_PATTERN
 
 
 def classify_by_rule(text: str) -> str | None:
-    """룰 1차 분류. 확정 불가 시 None (AI로 위임)."""
+    """
+    룰 1차 분류. 확정 불가 시 None (AI로 위임).
+
+    판정 순서 (R-4):
+      1) 의문 어미/의문사        → QUESTION
+      2) 부정 마커               → NEGATIVE
+      3) '?' 있고 긍정 마커 없음 → QUESTION (보수 유지)
+      4) 긍정 마커               → POSITIVE
+      5) 그 외                   → None (AI 위임)
+    """
     body = re.sub(r"@\w+", "", text or "").strip()
 
-    if _QUESTION_PATTERN.search(body):
+    if _INTERROGATIVE_PATTERN.search(body):
         return "QUESTION"
+
     for marker in _NEGATIVE_MARKERS:
         if marker in body:
             return "NEGATIVE"
-    for marker in _POSITIVE_MARKERS:
-        if marker in body:
-            return "POSITIVE"
+
+    has_positive = any(marker in body for marker in _POSITIVE_MARKERS)
+
+    if _QUESTION_MARK_PATTERN.search(body) and not has_positive:
+        return "QUESTION"
+
+    if has_positive:
+        return "POSITIVE"
     return None
 
 

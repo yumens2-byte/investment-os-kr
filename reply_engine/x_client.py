@@ -12,6 +12,11 @@ tweepy 4.17.0 시그니처 확인 완료:
   get_users_mentions(self, id, *, user_auth=False, **params)
   get_me(self, *, user_auth=True, **params)
   create_tweet(..., in_reply_to_tweet_id=None, user_auth=True)
+
+v1.3.0 (2026-08-30, R-3): fetch_mentions 반환에 saturated / oldest_id 추가.
+  수집 상한 포화(= 미수집 멘션 존재 가능)가 기존에는 로그·리포트 어디에도
+  흔적을 남기지 않아, 커서 전진으로 인한 영구 유실을 사후 판정할 수 없었다.
+  기존 반환 키는 전부 보존하므로 호출부 호환 유지.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ import tweepy
 
 from reply_engine.config import MENTIONS_MAX_RESULTS
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +83,8 @@ def fetch_mentions(
                      in_reply_to_user_id, created_at}, ... ],
         "users": { author_id: {username, created_at, followers}, ... },
         "newest_id": str | None,
+        "oldest_id": str | None,     # R-3: 유실 구간 사후 추적용
+        "saturated": bool,           # R-3: 수집 상한 포화 = 미수집분 존재 가능
         "error": str | None,
       }
     """
@@ -94,7 +101,8 @@ def fetch_mentions(
         resp = client.get_users_mentions(my_user_id, user_auth=True, **params)
     except Exception as exc:
         logger.error(f"[XClient] get_users_mentions 실패: {exc}")
-        return {"success": False, "tweets": [], "users": {}, "newest_id": None, "error": str(exc)}
+        return {"success": False, "tweets": [], "users": {}, "newest_id": None,
+                "oldest_id": None, "saturated": False, "error": str(exc)}
 
     tweets: list[dict] = []
     if resp and resp.data:
@@ -125,10 +133,23 @@ def fetch_mentions(
     meta = getattr(resp, "meta", None) or {}
     newest_id = meta.get("newest_id")
     newest_id = str(newest_id) if newest_id else None
+    oldest_id = meta.get("oldest_id")
+    oldest_id = str(oldest_id) if oldest_id else None
+
+    # R-3: 수집 상한 포화 감지. 커서는 newest_id로 전진하므로
+    # 이번에 못 가져온 구간은 이후 어떤 실행에서도 재조회되지 않는다.
+    saturated = len(tweets) >= MENTIONS_MAX_RESULTS
 
     logger.info(f"[XClient] 멘션 수집 {len(tweets)}건 (newest_id={newest_id})")
+    if saturated:
+        logger.warning(
+            f"[XClient] 수집 상한 포화 ({len(tweets)}/{MENTIONS_MAX_RESULTS}) — "
+            f"미수집 멘션 존재 가능. oldest_id={oldest_id} 이전 구간은 "
+            "커서 전진 후 재조회 불가 (R-3)"
+        )
+
     return {"success": True, "tweets": tweets, "users": users, "newest_id": newest_id,
-            "error": None}
+            "oldest_id": oldest_id, "saturated": saturated, "error": None}
 
 
 def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> str | None:

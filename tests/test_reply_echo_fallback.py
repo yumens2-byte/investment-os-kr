@@ -152,6 +152,6 @@ def test_f2_fallback_failure_still_skips(monkeypatch):
 
 def test_versions_bumped_f_series():
     """F-1/F-2 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.2.1"
+    assert run_reply.VERSION == "1.3.0"
     assert gate.VERSION == "1.1.1"
     assert generator.VERSION == "1.2.0"
