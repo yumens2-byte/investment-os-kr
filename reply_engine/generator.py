@@ -10,6 +10,14 @@ reply_engine/generator.py
 
 문구 풀 갱신은 HG-6 (월 1회 마스터 검수 배치 방식 — thread_builder 패턴).
 
+v1.4.0 (2026-09-04, R-12): 원글(부모 트윗) 컨텍스트 주입.
+  2026-08-18 「LLM 생성 컨텍스트 규약」 이행. 댓글 단문만으로 생성하면
+  환각·주객전도가 필연이며 실사고 2건의 공통 근본 원인이었다.
+  원글은 '맥락 파악용'이며 답글에 인용·요약하지 않는다.
+  ⚠️ 원글 작성자 = 나(계정 운영자)를 전제로 한 프롬프트다.
+     REPLY_FOREIGN_THREAD_ENABLED를 켜면 타인 글이 원글일 수 있으므로
+     활성화 시 이 전제를 재검토해야 한다.
+
 v1.3.0 (2026-08-30, R-9): 외국어 댓글 정형 문구 경로 분리.
   라이브 사고: 베트남어 댓글에 "현실적인 판단이라니, 동의합니다" 발행 —
   상대가 하지 않은 행동에 반응(프롬프트 규칙 3 위반). LLM이 이해하지 못하는
@@ -26,7 +34,7 @@ from core.gemini_gateway import call as gemini_call
 from reply_engine.config import REPLY_MAX_LENGTH
 from reply_engine.lang import is_non_korean
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +103,17 @@ def _pick_from_pool(category: str, seed_key: str) -> str:
     return pool[int(digest[:8], 16) % len(pool)]
 
 
+def _format_item(item: dict) -> str:
+    """
+    프롬프트 1행 구성 (R-12). 원글이 없으면 '(확인 불가)'로 명시해
+    LLM이 맥락을 지어내지 않도록 한다 (침묵보다 명시가 안전하다).
+    """
+    parent = (item.get("parent_text") or "").strip().replace("\n", " ")
+    parent_part = f'"{parent[:160]}"' if parent else "(확인 불가)"
+    body = (item.get("text") or "").replace("\n", " ")
+    return f'- id: {item["id"]} | 원글: {parent_part} | 댓글: "{body[:200]}"'
+
+
 def generate_batch(items: list[dict]) -> dict[str, str]:
     """
     items: [{"id": str, "text": str, "label": str}, ...]  (label은 PASS 라벨)
@@ -121,7 +140,7 @@ def generate_batch(items: list[dict]) -> dict[str, str]:
         logger.info("[Generator] AI 생성 대상 없음 — Gemini 호출 생략")
         return replies
 
-    prompt_items = "\n".join(f'- id: {i["id"]} | 댓글: "{i["text"][:200]}"' for i in ai_items)
+    prompt_items = "\n".join(_format_item(i) for i in ai_items)
     prompt = (
         "당신은 한국·미국 주식 데이터를 다루는 투자 정보 X 계정 운영자다. "
         "내 게시글에 달린 각 댓글에 짧은 답글을 작성하라.\n"
@@ -148,7 +167,13 @@ def generate_batch(items: list[dict]) -> dict[str, str]:
         "기계적인 '~합니다.' 종결만 반복하지 말 것\n"
         "9. 해시태그·링크·자기소개 금지. 이모지는 0~2개 — 답글 절반 이상에 "
         "자연스럽게 넣되 매번 같은 이모지 금지 (🙂만 반복 금지)\n"
-        "10. 답글끼리 표현이 겹치지 않게 각각 다르게 — 서로 다른 단어로 시작하라\n\n"
+        "10. 답글끼리 표현이 겹치지 않게 각각 다르게 — 서로 다른 단어로 시작하라\n"
+        "11. 각 항목의 '원글'은 그 댓글이 달린 내 게시글 본문이다. 댓글의 의도를 "
+        "원글 맥락에서 해석하라. 단 원글 내용을 답글에 인용·요약·설명하지 말 것 "
+        "— 맥락 파악 전용이다. 원글이 '(확인 불가)'면 맥락을 추측하지 말고 "
+        "담백한 호응만 하라\n"
+        "12. 원글을 쓴 사람은 나다. 내가 원글에서 이미 한 말(축하·설명·의견 등)을 "
+        "댓글 작성자가 한 것처럼 되받지 마라 — 역할이 뒤집힌다\n\n"
         "예시 (좋음/나쁨):\n"
         '- 댓글 "가자 돈복사!!!" (시장 환호) → 좋음: "오늘도 같이 가보시죠 ㅎㅎ 🙌" / '
         '나쁨: "응원 감사해요" (나를 응원한 게 아닌데 감사 — 의도 오독)\n'

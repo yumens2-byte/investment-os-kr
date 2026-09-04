@@ -25,13 +25,15 @@ v1.2.0 (2026-08-30, R-9): REPLY_NON_KR_LATIN_THRESHOLD 신설.
 v1.3.0 (2026-08-30, R-10/B): env_bool 헬퍼 신설.
   R-10 — REPLY_CURSOR_STALE_WARN_HOURS (커서 정체 경고 임계).
   B안  — REPLY_FOREIGN_THREAD_ENABLED / _RUN_CAP (타인 스레드 저상한 허용).
+
+v1.4.0 (2026-09-04, R-11): REPLY_RETRY_WINDOW_HOURS 신설 (발행 실패 재시도 창).
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -146,6 +148,15 @@ REPLY_NON_KR_LATIN_THRESHOLD: int = env_int("REPLY_NON_KR_LATIN_THRESHOLD", 3)
 # "장시간 신규 멘션 없음"을 뜻한다. 수집 0건이 정상(커서 동작)인지
 # 이상(X_MY_USER_ID 오등록 등)인지 구분하는 지표로 쓴다.
 REPLY_CURSOR_STALE_WARN_HOURS: int = env_int("REPLY_CURSOR_STALE_WARN_HOURS", 24)
+
+# ---------------------------------------------------------------------------
+# 재시도 창 (R-11, 2026-09-04)
+# ---------------------------------------------------------------------------
+# 중복 판정 기준이 '이력 존재'에서 '실제 발행됨'으로 바뀌면서, 미발행 이력은
+# 재처리 대상이 된다. 발행이 계속 실패하는 건이 매 실행마다 재시도되는 것을
+# 막기 위해, 기록 시각으로부터 이 시간이 지나면 재시도를 종결한다.
+# cron 4회/일 기준 24시간 = 최대 4회 재시도.
+REPLY_RETRY_WINDOW_HOURS: int = env_int("REPLY_RETRY_WINDOW_HOURS", 24)
 
 # ---------------------------------------------------------------------------
 # 타인 스레드 응답 (B안, 2026-08-30 마스터 승인)

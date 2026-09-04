@@ -67,7 +67,7 @@ def test_g1_market_cheer_replies_pass_gates():
 
 def test_g1_version_bumped():
     """G-1 반영 버전 확인 (지침 5)."""
-    assert generator.VERSION == "1.3.0"
+    assert generator.VERSION == "1.4.0"
 
 
 # ---------------------------------------------------------------------------
@@ -123,4 +123,4 @@ def test_g2_fallback_still_deterministic():
 
 
 def test_g2_version_bumped():
-    assert generator.VERSION == "1.3.0"
+    assert generator.VERSION == "1.4.0"

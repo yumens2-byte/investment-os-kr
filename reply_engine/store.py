@@ -16,6 +16,12 @@ Supabase 영속화 레이어.
 
 일 경계: KST (UTC+9 고정, DST 없음).
 
+v1.2.0 (2026-09-04, R-11): 중복 판정 기준을 '이력 존재' → '실제 발행됨'으로 변경.
+  DB 점검 결과 shadow 기간 49건 + PUBLISH_FAIL 2건이 발행 없이 이력에만 남아
+  L1 DUP 가드로 영구 차단됐다. response_tweet_id가 채워진 건만 중복으로 본다.
+  재시도 폭주를 막기 위해 실패 건은 REPLY_RETRY_WINDOW_HOURS 창 안에서만 재대상이 된다.
+  재처리 시 PK(reply_tweet_id) 충돌이 발생하므로 insert → upsert로 전환한다.
+
 v1.1.0 (2026-08-30, R-5): 배치 조회 3종 신설 (history_exists_bulk,
   count_author_responded_today_bulk, count_conversation_responded_today_bulk).
   기존 단건 함수는 하위호환·비상 경로로 유지한다.
@@ -30,8 +36,9 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from db.supabase_client import get_client
+from reply_engine.config import REPLY_RETRY_WINDOW_HOURS
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -65,18 +72,42 @@ def kst_day_start_utc_iso() -> str:
 # history — L1 멱등성 + 상한 카운트
 # ---------------------------------------------------------------------------
 
+def _retry_cutoff_iso() -> str:
+    """재시도 창의 하한 시각 (R-11). 이보다 오래된 미발행 이력은 재시도하지 않는다."""
+    return (datetime.now(UTC) - timedelta(hours=REPLY_RETRY_WINDOW_HOURS)).isoformat()
+
+
 def history_exists(reply_tweet_id: str) -> bool:
-    """L1 가드: 해당 댓글이 이미 처리 이력에 있는가."""
+    """
+    L1 가드: 이 댓글에 이미 답글이 나갔는가 (R-11).
+
+    '이력 존재'가 아니라 '실제 발행됨(response_tweet_id 존재)'을 중복 기준으로 본다.
+    미발행 이력(shadow 시뮬레이션, PUBLISH_FAIL)은 재시도 창 안에서는 중복이 아니며,
+    창을 넘기면 재시도를 종결하기 위해 중복으로 취급한다.
+    """
     try:
-        result = (
+        published = (
             get_client()
             .table(_T_HISTORY)
             .select("reply_tweet_id")
             .eq("reply_tweet_id", reply_tweet_id)
+            .not_.is_("response_tweet_id", "null")
             .limit(1)
             .execute()
         )
-        return bool(result.data)
+        if published.data:
+            return True
+
+        expired = (
+            get_client()
+            .table(_T_HISTORY)
+            .select("reply_tweet_id")
+            .eq("reply_tweet_id", reply_tweet_id)
+            .lt("created_at", _retry_cutoff_iso())
+            .limit(1)
+            .execute()
+        )
+        return bool(expired.data)
     except Exception as exc:
         logger.error(f"[Store] history_exists 조회 실패: {exc}")
         # 조회 실패 시 True 반환 — 확인 불가면 발행하지 않는 보수적 처리
@@ -84,9 +115,19 @@ def history_exists(reply_tweet_id: str) -> bool:
 
 
 def insert_history(record: dict) -> bool:
-    """이력 INSERT. PK 충돌 포함 실패 시 False."""
+    """
+    이력 기록. 실패 시 False.
+
+    R-11: 발행 실패·shadow 건이 재처리 대상이 되므로 같은 reply_tweet_id로
+    다시 들어올 수 있다. PK 충돌을 피하기 위해 upsert를 쓴다.
+    """
     try:
-        result = get_client().table(_T_HISTORY).insert(record).execute()
+        result = (
+            get_client()
+            .table(_T_HISTORY)
+            .upsert(record, on_conflict="reply_tweet_id")
+            .execute()
+        )
         return bool(result.data)
     except Exception as exc:
         logger.error(f"[Store] insert_history 실패 ({record.get('reply_tweet_id')}): {exc}")
@@ -181,30 +222,45 @@ def _chunks(items: list[str], size: int = _IN_CHUNK_SIZE):
 
 def history_exists_bulk(reply_tweet_ids: list[str]) -> set[str]:
     """
-    L1 배치 가드: 이미 처리 이력이 있는 reply_tweet_id 집합.
+    L1 배치 가드: 재응답하면 안 되는 reply_tweet_id 집합 (R-11).
 
-    조회 실패 시 전건 '존재'로 반환한다 — 확인 불가면 발행하지 않는 보수적 처리
-    (단건 history_exists의 True 반환과 동일 정책).
+    중복 기준은 '이력 존재'가 아니라 다음 둘 중 하나다.
+      (a) 실제 발행됨 — response_tweet_id 존재
+      (b) 재시도 창 경과 — 미발행이지만 REPLY_RETRY_WINDOW_HOURS를 넘긴 이력
+
+    조회 실패 시 전건 '중복'으로 반환한다 — 확인 불가면 발행하지 않는 보수적 처리
+    (단건 history_exists와 동일 정책).
     """
     ids = [i for i in dict.fromkeys(reply_tweet_ids) if i]
     if not ids:
         return set()
 
+    cutoff = _retry_cutoff_iso()
     found: set[str] = set()
     try:
         for chunk in _chunks(ids):
-            result = (
+            published = (
                 get_client()
                 .table(_T_HISTORY)
                 .select("reply_tweet_id")
                 .in_("reply_tweet_id", chunk)
+                .not_.is_("response_tweet_id", "null")
                 .execute()
             )
-            found |= {
-                row["reply_tweet_id"]
-                for row in (result.data or [])
-                if row.get("reply_tweet_id")
-            }
+            expired = (
+                get_client()
+                .table(_T_HISTORY)
+                .select("reply_tweet_id")
+                .in_("reply_tweet_id", chunk)
+                .lt("created_at", cutoff)
+                .execute()
+            )
+            for result in (published, expired):
+                found |= {
+                    row["reply_tweet_id"]
+                    for row in (result.data or [])
+                    if row.get("reply_tweet_id")
+                }
     except Exception as exc:
         logger.error(f"[Store] history_exists_bulk 실패 → 전건 DUP 처리: {exc}")
         return set(ids)

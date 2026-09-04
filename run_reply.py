@@ -374,7 +374,15 @@ def main() -> dict:
         summary["non_kr_replies"] = len(non_kr_ids)
 
         replies = generator.generate_batch(
-            [{"id": t["id"], "text": t["text"], "label": t["label"]} for t in pass_items]
+            [
+                {
+                    "id": t["id"],
+                    "text": t["text"],
+                    "label": t["label"],
+                    "parent_text": t.get("parent_text", ""),   # R-12
+                }
+                for t in pass_items
+            ]
         )
         if len(non_kr_ids) < len(pass_items):
             guard.record_gemini()

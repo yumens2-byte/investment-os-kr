@@ -70,5 +70,5 @@ def test_versions_bumped_h_series():
     import following_engine.config as fc
     import reply_engine.config as rc
 
-    assert rc.VERSION == "1.3.0"
+    assert rc.VERSION == "1.4.0"
     assert fc.VERSION == "1.0.2"

@@ -20,7 +20,11 @@ class _FakeQuery:
         self._result = result
         self._fail = fail
 
-    def __getattr__(self, _name):
+    def __getattr__(self, name):
+        # R-11: postgrest의 not_ 은 메서드가 아니라 property다 (.not_.is_(...) 체이닝)
+        if name == "not_":
+            return self
+
         def _chain(*_args, **_kwargs):
             return self
         return _chain
@@ -60,6 +64,7 @@ def test_kst_helpers_format():
 # ---------------------------------------------------------------------------
 
 def test_history_exists_true_false(monkeypatch):
+    """R-11: 중복 기준은 '실제 발행됨' 또는 '재시도 창 경과'다."""
     _patch_client(monkeypatch, data=[{"reply_tweet_id": "t1"}])
     assert store.history_exists("t1") is True
 

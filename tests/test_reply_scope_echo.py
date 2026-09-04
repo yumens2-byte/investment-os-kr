@@ -183,7 +183,7 @@ def test_versions_bumped_p_series():
     from reply_engine import config
 
     assert run_reply.VERSION == "1.5.0"
-    assert x_client.VERSION == "1.3.0"
+    assert x_client.VERSION == "1.4.0"
     assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.3.0"
-    assert config.VERSION == "1.3.0"
+    assert generator.VERSION == "1.4.0"
+    assert config.VERSION == "1.4.0"

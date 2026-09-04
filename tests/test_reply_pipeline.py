@@ -53,6 +53,7 @@ def test_fetch_mentions_parses_response():
         "conversation_id": "300",
         "in_reply_to_user_id": "111",
         "created_at": tweet.created_at,
+        "parent_text": "",     # R-12: referenced_tweets 없음 → 빈 문자열
     }
     assert result["users"]["222"]["followers"] == 42
 
