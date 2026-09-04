@@ -28,6 +28,13 @@ v1.3.0 (2026-08-30, R-2/R-3/R-5):
   R-3 수집 포화 관측 — summary에 collection_saturated / oldest_id 기록.
   R-5 배치 조회 — 정적 필터 통과분으로 CapContext 1회 구성 (DB 3쿼리 고정).
 
+v1.5.0 (2026-08-30, R-10/B):
+  R-10 user_id 무결성 — X_MY_USER_ID와 커서 캐시 불일치를 경고로 노출한다.
+       B-1 규약(변수 > 커서)상 계정 교체 시 불일치는 정상이므로 중단하지 않는다.
+       커서 정체(updated_at) 관측으로 "정상 0건"과 "이상 0건"을 구분한다.
+  B안  타인 스레드 응답 — 회당 저상한 내 허용. P-1 실사고(주객전도) 방어선을
+       해제하는 변경이므로 기본 비활성(opt-in)이며 Variables로만 켠다.
+
 v1.4.0 (2026-08-30, R-9):
   외국어 댓글은 AI 생성 대신 정형 문구를 사용한다 (마스터 확정 C안).
   AI 생성 대상이 0건이면 Gemini 호출이 없으므로 예산 계상도 하지 않는다.
@@ -52,7 +59,10 @@ from reply_engine.config import (
     PUBLISH_START_DELAY_MAX_SEC,
     REPLY_AUTHOR_DAILY_CAP,
     REPLY_CONV_DAILY_CAP,
+    REPLY_CURSOR_STALE_WARN_HOURS,
     REPLY_DAILY_CAP,
+    REPLY_FOREIGN_THREAD_ENABLED,
+    REPLY_FOREIGN_THREAD_RUN_CAP,
     REPLY_RECENT_COMPARE_COUNT,
     STARTUP_JITTER_MAX_SEC,
     get_mode,
@@ -60,7 +70,7 @@ from reply_engine.config import (
     is_enabled,
 )
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -98,6 +108,24 @@ def _write_report(summary: dict, guard=None) -> None:
         logger.warning(f"[Report] 리포트 저장 실패 (무시): {exc}")
 
 
+def _cursor_stale_hours(cursor: dict | None) -> int | None:
+    """
+    커서 updated_at 기준 경과 시간(시). 값이 없거나 파싱 실패 시 None (R-10).
+    관측 지표이므로 어떤 예외도 파이프라인을 중단시키지 않는다.
+    """
+    raw = (cursor or {}).get("updated_at")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return max(0, int((datetime.now(UTC) - parsed).total_seconds() // 3600))
+    except (ValueError, TypeError) as exc:
+        logger.warning(f"[Step2] 커서 updated_at 파싱 실패 (관측 생략): {exc}")
+        return None
+
+
 def main() -> dict:
     _setup_logging()
     mode = get_mode()
@@ -113,6 +141,9 @@ def main() -> dict:
         "oldest_id": None,               # R-3: 유실 구간 사후 추적용
         "candidates": 0,
         "non_kr_replies": 0,      # R-9: 정형 문구로 처리된 외국어 건수
+        "foreign_thread_replies": 0,   # B안: 타인 스레드 응답 건수
+        "cursor_stale_hours": None,    # R-10: 커서 정체 시간 (0건 원인 구분용)
+        "user_id_mismatch": False,     # R-10: 변수 vs 커서 캐시 불일치 경고
         "published": 0,
         "skip_reasons": {},
         "review": [],   # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
@@ -154,8 +185,34 @@ def main() -> dict:
 
     cursor = store.get_cursor(_ACCOUNT)
     # user_id 우선순위 (B-1): X_MY_USER_ID 변수 > 커서 캐시 > get_me (읽기 1콜)
-    my_user_id = get_my_user_id() or (cursor or {}).get("my_user_id") or ""
+    env_user_id = get_my_user_id()
+    cached_user_id = (cursor or {}).get("my_user_id") or ""
+
+    # R-10: 변수와 커서 캐시가 다르면 오등록 가능성을 경고한다.
+    # 중단하지는 않는다 — B-1 규약(변수 > 커서 캐시)상 계정 교체 시 불일치는
+    # 정상 시나리오이며, 중단시키면 교체 자체가 불가능해진다.
+    # 오등록이면 남의 멘션이 전건 OUT_OF_SCOPE로 걸러져 '에러 없이 0건'이 되므로,
+    # 로그와 리포트에 흔적을 남겨 조기 발견을 돕는 것이 목적이다.
+    user_id_mismatch = bool(env_user_id and cached_user_id and env_user_id != cached_user_id)
+    summary["user_id_mismatch"] = user_id_mismatch
+    if user_id_mismatch:
+        logger.warning(
+            f"[Step2] user_id 불일치 — X_MY_USER_ID={env_user_id} vs "
+            f"커서 캐시={cached_user_id}. 계정 교체가 아니라면 변수 오등록이다 (R-10)"
+        )
+
+    my_user_id = env_user_id or cached_user_id
     since_id = (cursor or {}).get("since_id") or None
+
+    # R-10: 커서는 신규 멘션이 있을 때만 전진한다. 정체가 길면 '정상 0건'이 아니라
+    # 수집 경로 이상일 수 있으므로 관측 지표로 남긴다 (읽기 콜 0).
+    stale_hours = _cursor_stale_hours(cursor)
+    summary["cursor_stale_hours"] = stale_hours
+    if stale_hours is not None and stale_hours >= REPLY_CURSOR_STALE_WARN_HOURS:
+        logger.warning(
+            f"[Step2] 커서 {stale_hours}시간째 미전진 — 장시간 신규 멘션 없음. "
+            "X_MY_USER_ID 및 계정 상태 점검 권장 (R-10)"
+        )
 
     if my_user_id:
         logger.info(f"[Step2] user_id 확보 (get_me 생략): {my_user_id}")
@@ -253,16 +310,31 @@ def main() -> dict:
             logger.warning("[Step3.5] 읽기 예산 부족 — 루트 미검증 후보 전량 보수적 스킵")
 
         verified: list[dict] = []
+        foreign_admitted = 0
         for tweet in candidates:
             root_author = (roots or {}).get(tweet["conversation_id"])
             if roots is None or root_author is None:
                 _skip(tweet["id"], "THREAD_UNVERIFIED")   # 조회 실패/루트 삭제 → 보수적 스킵
             elif root_author != my_user_id:
-                _skip(tweet["id"], "OUT_OF_SCOPE_THREAD")  # 타인 글 스레드 → 응답 금지
+                # B안 (2026-08-30): 이 건은 in_reply_to_user_id == 나를 이미 통과했다.
+                # 즉 '나에게 직접 말을 건' 댓글이며, 원 게시글만 타인 것이다.
+                # 남의 스레드 자동 답글은 스팸으로 비칠 수 있어 회당 저상한을 둔다.
+                if not REPLY_FOREIGN_THREAD_ENABLED:
+                    _skip(tweet["id"], "OUT_OF_SCOPE_THREAD")
+                elif foreign_admitted >= REPLY_FOREIGN_THREAD_RUN_CAP:
+                    _skip(tweet["id"], "FOREIGN_THREAD_CAP")
+                else:
+                    foreign_admitted += 1
+                    tweet["foreign_thread"] = True
+                    verified.append(tweet)
             else:
                 verified.append(tweet)
         candidates = verified
-        logger.info(f"[Step3.5] 루트 검증 통과 {len(candidates)}건")
+        summary["foreign_thread_replies"] = foreign_admitted
+        logger.info(
+            f"[Step3.5] 루트 검증 통과 {len(candidates)}건 "
+            f"(타인 스레드 {foreign_admitted}건)"
+        )
 
     summary["candidates"] = len(candidates)
 
@@ -377,6 +449,7 @@ def main() -> dict:
             "label": tweet["label"],
             "reply_text": reply_text,
             "source": "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI",
+            "foreign_thread": bool(tweet.get("foreign_thread")),
             "result": None,
         }
         summary["review"].append(review_entry)

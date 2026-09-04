@@ -22,13 +22,16 @@ v1.1.0 (2026-08-30, R-3): 멘션 수집 상한을 API 하한 5 → 상한 100으
 v1.2.0 (2026-08-30, R-9): REPLY_NON_KR_LATIN_THRESHOLD 신설.
   외국어 댓글에 AI가 의도를 지어낸 답글을 발행한 라이브 사고 대응.
   차단이 아니라 '정형 문구 전환' 임계로 사용한다 (마스터 확정 C안).
+v1.3.0 (2026-08-30, R-10/B): env_bool 헬퍼 신설.
+  R-10 — REPLY_CURSOR_STALE_WARN_HOURS (커서 정체 경고 임계).
+  B안  — REPLY_FOREIGN_THREAD_ENABLED / _RUN_CAP (타인 스레드 저상한 허용).
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -56,6 +59,18 @@ def env_int_clamped(name: str, default: int, lo: int, hi: int) -> int:
     if value < lo or value > hi:
         return default
     return value
+
+
+def env_bool(name: str, default: bool) -> bool:
+    """
+    bool 환경변수 파서 (R-10/B, 2026-08-30).
+    미설정·빈 문자열이면 기본값. 'true'/'1'/'yes'만 참으로 본다(대소문자 무시).
+    2026-08-20 사고(REPLY_MODE에 'true' 오입력)를 감안해 관대한 파싱은 하지 않는다.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("true", "1", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +138,36 @@ SPAM_ACCOUNT_MIN_AGE_DAYS: int = 30
 # 3자: "Nice", "GOOD" 등 짧은 영어 칭찬까지 정형 문구로 처리 — 보수적 기본값.
 # 이모지·숫자·기호 전용 댓글("👍", "!!!")은 라틴 0자라 영향받지 않는다.
 REPLY_NON_KR_LATIN_THRESHOLD: int = env_int("REPLY_NON_KR_LATIN_THRESHOLD", 3)
+
+# ---------------------------------------------------------------------------
+# 커서 무결성 관측 (R-10, 2026-08-30)
+# ---------------------------------------------------------------------------
+# 커서는 신규 멘션이 있을 때만 전진하므로, updated_at이 오래 정체됐다는 것은
+# "장시간 신규 멘션 없음"을 뜻한다. 수집 0건이 정상(커서 동작)인지
+# 이상(X_MY_USER_ID 오등록 등)인지 구분하는 지표로 쓴다.
+REPLY_CURSOR_STALE_WARN_HOURS: int = env_int("REPLY_CURSOR_STALE_WARN_HOURS", 24)
+
+# ---------------------------------------------------------------------------
+# 타인 스레드 응답 (B안, 2026-08-30 마스터 승인)
+# ---------------------------------------------------------------------------
+# "내가 타인 게시글에 단 댓글"에 달린 대댓글은 in_reply_to_user_id가 나이므로
+# 나에게 직접 말을 건 것이지만, 원 게시글 작성자가 타인이라 P-1에서 차단돼 왔다.
+# 실측 표본에서 탈락분의 100%(수집의 37.5%)를 차지해 발행량 병목이었다.
+# 남의 스레드에서의 자동 답글은 스팸으로 비칠 수 있으므로 회당 저상한을 둔다.
+#
+# 주의: 일일 상한이 아니라 '회당' 상한이다. kr_reply_history에 타인 스레드
+# 여부를 저장하는 컬럼이 없어 DB 기준 일일 집계가 불가능하기 때문이며,
+# 스키마 변경 없이 안전하게 제한하기 위한 설계다.
+# cron 4회 기준 실질 일 상한 = REPLY_FOREIGN_THREAD_RUN_CAP × 4.
+# ⚠️ 기본 비활성(opt-in). P-1(2026-08-18)은 실사고 대응 방어선이다:
+#    내가 타인 글에 축하 댓글 → 글 주인이 "축하해주셔서 감사합니다" 답글 →
+#    봇이 "축하해주셔서 진심으로 감사합니다"로 미러링한 주객전도 사고.
+#    근본 원인은 원글 컨텍스트 부재이며 해당 패치(v1.1.0 원글 주입)는 아직 미반영이다.
+#    따라서 이 값을 true로 켜면 그 사고 시나리오가 다시 열린다.
+#    GATE_ECHO가 어휘 중복은 잡지만("축하해주셔서..." 재현 시 차단 실측 확인),
+#    의미 역전("축하드려요! 🎉")은 통과하므로 2차 방어선은 불완전하다.
+REPLY_FOREIGN_THREAD_ENABLED: bool = env_bool("REPLY_FOREIGN_THREAD_ENABLED", False)
+REPLY_FOREIGN_THREAD_RUN_CAP: int = env_int("REPLY_FOREIGN_THREAD_RUN_CAP", 1)
 
 
 # ---------------------------------------------------------------------------
