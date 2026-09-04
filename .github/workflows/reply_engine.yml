@@ -114,6 +114,13 @@ jobs:
           REPLY_AUTHOR_DAILY_CAP:     ${{ vars.REPLY_AUTHOR_DAILY_CAP }}
           REPLY_CONV_DAILY_CAP:       ${{ vars.REPLY_CONV_DAILY_CAP }}
           REPLY_MENTIONS_MAX_RESULTS: ${{ vars.REPLY_MENTIONS_MAX_RESULTS }}
+          # R-10/B (2026-08-30)
+          #   REPLY_FOREIGN_THREAD_ENABLED  — 타인 스레드 응답 허용 (기본 true)
+          #   REPLY_FOREIGN_THREAD_RUN_CAP  — '회당' 상한. 일 상한 = 값 × cron 4회 (기본 1)
+          #   REPLY_CURSOR_STALE_WARN_HOURS — 커서 정체 경고 임계 (기본 24)
+          REPLY_FOREIGN_THREAD_ENABLED:  ${{ vars.REPLY_FOREIGN_THREAD_ENABLED }}
+          REPLY_FOREIGN_THREAD_RUN_CAP:  ${{ vars.REPLY_FOREIGN_THREAD_RUN_CAP }}
+          REPLY_CURSOR_STALE_WARN_HOURS: ${{ vars.REPLY_CURSOR_STALE_WARN_HOURS }}
           DAILY_BUDGET_KRW:       ${{ vars.DAILY_BUDGET_KRW }}
           X_READ_COST_KRW:        ${{ vars.X_READ_COST_KRW }}
           X_WRITE_COST_KRW:       ${{ vars.X_WRITE_COST_KRW }}
