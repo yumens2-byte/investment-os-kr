@@ -12,17 +12,6 @@ tweepy 4.17.0 시그니처 확인 완료:
   get_users_mentions(self, id, *, user_auth=False, **params)
   get_me(self, *, user_auth=True, **params)
   create_tweet(..., in_reply_to_tweet_id=None, user_auth=True)
-
-v1.4.0 (2026-09-04, R-12): referenced_tweets.id 확장으로 원글(부모 트윗) 컨텍스트 확보.
-  expansions 확장은 같은 응답에 포함되므로 추가 읽기 콜 0.
-  2026-08-18 「LLM 생성 컨텍스트 규약」 이행 — 댓글 단문만 보고 생성하면
-  환각·주객전도가 필연이며, 실제 사고 2건(P-1 축하 미러링, R-9 베트남어 오독)의
-  공통 근본 원인이었다.
-
-v1.3.0 (2026-08-30, R-3): fetch_mentions 반환에 saturated / oldest_id 추가.
-  수집 상한 포화(= 미수집 멘션 존재 가능)가 기존에는 로그·리포트 어디에도
-  흔적을 남기지 않아, 커서 전진으로 인한 영구 유실을 사후 판정할 수 없었다.
-  기존 반환 키는 전부 보존하므로 호출부 호환 유지.
 """
 
 from __future__ import annotations
@@ -74,33 +63,6 @@ def fetch_my_user_id(client: tweepy.Client) -> str | None:
         return None
 
 
-def _parent_text(tweet: Any, referenced_texts: dict[str, str]) -> str:
-    """
-    이 트윗이 '답글로 단' 대상(부모 트윗)의 본문을 반환한다 (R-12).
-
-    referenced_tweets에는 replied_to / quoted / retweeted가 섞여 오므로
-    replied_to만 취한다. 참조가 없거나 includes에 본문이 없으면 "" (그 경우
-    generator는 원글 없이 생성하는 기존 동작으로 폴백한다).
-    어떤 예외도 수집 전체를 실패시키지 않는다.
-    """
-    try:
-        refs = getattr(tweet, "referenced_tweets", None) or []
-        for ref in refs:
-            ref_type = getattr(ref, "type", None) or (
-                ref.get("type") if isinstance(ref, dict) else None
-            )
-            if ref_type != "replied_to":
-                continue
-            ref_id = getattr(ref, "id", None) or (
-                ref.get("id") if isinstance(ref, dict) else None
-            )
-            if ref_id:
-                return referenced_texts.get(str(ref_id), "")
-    except Exception as exc:  # noqa: BLE001 - 관측 실패가 수집을 막지 않는다
-        logger.warning(f"[XClient] 원글 컨텍스트 해석 실패 (무시): {exc}")
-    return ""
-
-
 def fetch_mentions(
     client: tweepy.Client,
     my_user_id: str,
@@ -113,24 +75,16 @@ def fetch_mentions(
       {
         "success": bool,
         "tweets": [ {id, text, author_id, conversation_id,
-                     in_reply_to_user_id, created_at, parent_text}, ... ],
-          · parent_text — 이 댓글이 답글로 단 원글 본문 (R-12, 없으면 "")
+                     in_reply_to_user_id, created_at}, ... ],
         "users": { author_id: {username, created_at, followers}, ... },
         "newest_id": str | None,
-        "oldest_id": str | None,     # R-3: 유실 구간 사후 추적용
-        "saturated": bool,           # R-3: 수집 상한 포화 = 미수집분 존재 가능
         "error": str | None,
       }
     """
     params: dict[str, Any] = {
         "max_results": MENTIONS_MAX_RESULTS,
-        "tweet_fields": [
-            "author_id", "conversation_id", "in_reply_to_user_id",
-            "created_at", "referenced_tweets",
-        ],
-        # R-12: referenced_tweets.id는 부모 트윗을 같은 응답의 includes에 실어주므로
-        #       추가 읽기 콜이 발생하지 않는다.
-        "expansions": ["author_id", "referenced_tweets.id"],
+        "tweet_fields": ["author_id", "conversation_id", "in_reply_to_user_id", "created_at"],
+        "expansions": ["author_id"],
         "user_fields": ["username", "created_at", "public_metrics"],
     }
     if since_id:
@@ -140,15 +94,7 @@ def fetch_mentions(
         resp = client.get_users_mentions(my_user_id, user_auth=True, **params)
     except Exception as exc:
         logger.error(f"[XClient] get_users_mentions 실패: {exc}")
-        return {"success": False, "tweets": [], "users": {}, "newest_id": None,
-                "oldest_id": None, "saturated": False, "error": str(exc)}
-
-    includes = getattr(resp, "includes", None) or {}
-
-    # R-12: includes.tweets = 참조된(부모) 트윗 본문. id -> text 매핑을 먼저 만든다.
-    referenced_texts: dict[str, str] = {}
-    for rt in includes.get("tweets", []) or []:
-        referenced_texts[str(rt.id)] = getattr(rt, "text", "") or ""
+        return {"success": False, "tweets": [], "users": {}, "newest_id": None, "error": str(exc)}
 
     tweets: list[dict] = []
     if resp and resp.data:
@@ -163,11 +109,11 @@ def fetch_mentions(
                         str(t.in_reply_to_user_id) if t.in_reply_to_user_id else ""
                     ),
                     "created_at": t.created_at,  # datetime | None
-                    "parent_text": _parent_text(t, referenced_texts),   # R-12
                 }
             )
 
     users: dict[str, dict] = {}
+    includes = getattr(resp, "includes", None) or {}
     for u in includes.get("users", []) or []:
         metrics = getattr(u, "public_metrics", None) or {}
         users[str(u.id)] = {
@@ -179,29 +125,18 @@ def fetch_mentions(
     meta = getattr(resp, "meta", None) or {}
     newest_id = meta.get("newest_id")
     newest_id = str(newest_id) if newest_id else None
-    oldest_id = meta.get("oldest_id")
-    oldest_id = str(oldest_id) if oldest_id else None
-
-    # R-3: 수집 상한 포화 감지. 커서는 newest_id로 전진하므로
-    # 이번에 못 가져온 구간은 이후 어떤 실행에서도 재조회되지 않는다.
-    saturated = len(tweets) >= MENTIONS_MAX_RESULTS
 
     logger.info(f"[XClient] 멘션 수집 {len(tweets)}건 (newest_id={newest_id})")
-    if saturated:
-        logger.warning(
-            f"[XClient] 수집 상한 포화 ({len(tweets)}/{MENTIONS_MAX_RESULTS}) — "
-            f"미수집 멘션 존재 가능. oldest_id={oldest_id} 이전 구간은 "
-            "커서 전진 후 재조회 불가 (R-3)"
-        )
-
     return {"success": True, "tweets": tweets, "users": users, "newest_id": newest_id,
-            "oldest_id": oldest_id, "saturated": saturated, "error": None}
+            "error": None}
 
 
-def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> str | None:
+def post_reply(
+    client: tweepy.Client, text: str, in_reply_to_tweet_id: str
+) -> tuple[str | None, str | None]:
     """
     답글 1건 발행. 재시도 없음 (승인 E — 타임아웃 후 재시도 시 이중 답글 리스크).
-    성공 시 tweet_id, 실패 시 None.
+    반환: (tweet_id | None, 오류 문자열 | None) — 2026-09-08 오류 원문 DB 저장용.
     """
     try:
         resp = client.create_tweet(
@@ -211,10 +146,10 @@ def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> s
         )
         tweet_id = str(resp.data["id"])
         logger.info(f"[XClient] 답글 발행 완료: {tweet_id} → reply_to={in_reply_to_tweet_id}")
-        return tweet_id
+        return tweet_id, None
     except Exception as exc:
         logger.error(f"[XClient] 답글 발행 실패 (재시도 없음): {exc}")
-        return None
+        return None, str(exc)
 
 
 def fetch_conversation_roots(
@@ -262,3 +197,17 @@ def is_spend_cap_error(error_text: str | None) -> bool:
         return False
     lowered = str(error_text).lower()
     return any(marker in lowered for marker in _SPEND_CAP_MARKERS)
+
+
+def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:
+    """
+    댓글 좋아요 1건 (2026-08-26 승인 — LIKE 기능). 단일 시도, 무재시도.
+    X의 like는 멱등이라 이중 호출도 무해하나, 이력(L1)으로 낭비 호출을 막는다.
+    반환: (성공 여부, 오류 문자열|None) — spend cap 구분용 (N-1 규약).
+    """
+    try:
+        client.like(tweet_id, user_auth=True)
+        return True, None
+    except Exception as exc:
+        logger.warning(f"[XClient] 좋아요 실패 (재시도 없음): {tweet_id} | {exc}")
+        return False, str(exc)

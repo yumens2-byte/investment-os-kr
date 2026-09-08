@@ -14,26 +14,14 @@ skip_reason 코드:
   SPAM_LINK      — URL 포함
   SPAM_KEYWORD   — 스팸 키워드 포함
   SPAM_ACCOUNT   — 신생/무팔로워 계정 휴리스틱
-  AUTHOR_CAP     — 사용자별 일일 상한 도달 (L4, DB 실적 기준)
-  CONV_CAP       — 대화별 일일 상한 도달 (L5, DB 실적 기준)
-  AUTHOR_CAP_RUN — 이번 실행 내 선행 승인으로 사용자 상한 도달 (L4, R-2)
-  CONV_CAP_RUN   — 이번 실행 내 선행 승인으로 대화 상한 도달 (L5, R-2)
-
-v1.1.0 (2026-08-30, R-2/R-5):
-  R-2 캡 이중 계수 — check_caps_and_dup은 Step3에서 전건 일괄 실행되므로
-    발행 전 시점의 DB 카운트가 항상 0이었고, 동일 배치 내 동일 저자 다건이
-    전량 통과했다. 실사고(08-30 artifact): author_id=2057775414777671680에게
-    한 실행에서 2건 발행 — REPLY_AUTHOR_DAILY_CAP=1 위반.
-    Notion 공통지침 '캡 이중 계수 규약'(2026-08-18)에 따라
-    DB 스냅샷 + in-run 카운터 이중 계수로 재구성.
-  R-5 배치 조회 — 후보 N건 × 3쿼리를 CapContext 1회 구성(3쿼리)으로 대체.
+  AUTHOR_CAP     — 사용자별 일일 상한 도달 (L4)
+  CONV_CAP       — 대화별 일일 상한 도달 (L5)
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from reply_engine import store
@@ -66,6 +54,23 @@ def _to_aware_utc(value) -> datetime | None:
         except ValueError:
             return None
     return None
+
+
+_KO_CHAR = re.compile(r"[가-힣ㄱ-ㅎㅏ-ㅣ]")
+KOREAN_RATIO_THRESHOLD: float = 0.3
+
+
+def is_korean_dominant(body: str) -> bool:
+    """
+    문자(알파벳류) 중 한글 비율이 임계 이상이면 True (Q-1).
+    - 문자가 하나도 없으면(이모지·기호·숫자만) True — 기존 필터/분류에 위임
+    - 자모(ㅋㅋ/ㅇㅈ)도 한글로 계산
+    """
+    letters = [ch for ch in body if ch.isalpha()]
+    if not letters:
+        return True
+    korean = sum(1 for ch in letters if _KO_CHAR.match(ch))
+    return korean / len(letters) >= KOREAN_RATIO_THRESHOLD
 
 
 def check_tweet(
@@ -106,6 +111,9 @@ def check_tweet(
         return False, "TOO_SHORT"
     if _URL_PATTERN.search(text):
         return False, "SPAM_LINK"
+    # Q-1 (2026-09-08 실사고): 베트남어 댓글에 "동의합니다"로 아는 척 응답 → 외국어는 무응답
+    if not is_korean_dominant(body):
+        return False, "SKIP_FOREIGN"
     for kw in SPAM_KEYWORDS:
         if kw in text:
             return False, "SPAM_KEYWORD"
@@ -122,80 +130,22 @@ def check_tweet(
     return True, None
 
 
-@dataclass
-class CapContext:
+def check_caps_and_dup(tweet: dict) -> tuple[bool, str | None]:
     """
-    캡 판정 컨텍스트 (R-2/R-5).
-
-    DB 스냅샷(당일 발행 실적) + in-run 카운터(이번 실행 내 승인 건수)를
-    이중 계수한다. DB만 참조하면 발행 전 시점 카운트가 0이라
-    동일 배치 내 다건이 전부 통과한다 (08-30 실사고).
-    """
-
-    existing_ids: set[str] = field(default_factory=set)
-    author_today: dict[str, int] = field(default_factory=dict)
-    conv_today: dict[str, int] = field(default_factory=dict)
-    author_run: dict[str, int] = field(default_factory=dict)
-    conv_run: dict[str, int] = field(default_factory=dict)
-    bulk_ready: bool = False
-
-
-def build_cap_context(tweets: list[dict]) -> CapContext:
-    """
-    후보 트윗 목록으로 배치 스냅샷을 1회 구성한다 (DB 3쿼리 고정, R-5).
-    정적 필터 통과 건에만 호출해 조회 대상을 최소화한다.
-    """
-    ids = [t.get("id", "") for t in tweets]
-    authors = [t.get("author_id", "") for t in tweets]
-    convs = [t.get("conversation_id", "") for t in tweets]
-    return CapContext(
-        existing_ids=store.history_exists_bulk(ids),
-        author_today=store.count_author_responded_today_bulk(authors),
-        conv_today=store.count_conversation_responded_today_bulk(convs),
-        bulk_ready=True,
-    )
-
-
-def check_and_admit(tweet: dict, ctx: CapContext | None = None) -> tuple[bool, str | None]:
-    """
-    L1 중복 / L4 사용자 상한 / L5 대화 상한 판정.
-
-    ⚠️ 부수효과: 통과 시 ctx의 in-run 카운터를 증가시킨다 (승인 = 슬롯 점유).
-       ctx=None이면 레거시 단건 쿼리 경로로 동작하며 in-run 계수는 없다.
-
-    반환: (통과 여부, skip_reason | None)
+    DB 조회가 필요한 가드 (L1 중복 / L4 사용자 상한 / L5 대화 상한).
+    정적 필터 통과 건에만 호출해 DB 조회량을 최소화한다.
     """
     reply_tweet_id = tweet.get("id", "")
     author_id = tweet.get("author_id", "")
     conversation_id = tweet.get("conversation_id", "")
 
-    if ctx is not None and ctx.bulk_ready:
-        if reply_tweet_id in ctx.existing_ids:
-            return False, "DUP"
-        author_base = ctx.author_today.get(author_id, 0)
-        conv_base = ctx.conv_today.get(conversation_id, 0)
-    else:
-        if store.history_exists(reply_tweet_id):
-            return False, "DUP"
-        author_base = store.count_author_responded_today(author_id)
-        conv_base = store.count_conversation_responded_today(conversation_id)
+    if store.history_exists(reply_tweet_id):
+        return False, "DUP"
 
-    author_run = ctx.author_run.get(author_id, 0) if ctx is not None else 0
-    conv_run = ctx.conv_run.get(conversation_id, 0) if ctx is not None else 0
+    if store.count_author_responded_today(author_id) >= REPLY_AUTHOR_DAILY_CAP:
+        return False, "AUTHOR_CAP"
 
-    if author_base + author_run >= REPLY_AUTHOR_DAILY_CAP:
-        return False, "AUTHOR_CAP_RUN" if author_run else "AUTHOR_CAP"
-
-    if conv_base + conv_run >= REPLY_CONV_DAILY_CAP:
-        return False, "CONV_CAP_RUN" if conv_run else "CONV_CAP"
-
-    if ctx is not None:
-        ctx.author_run[author_id] = author_run + 1
-        ctx.conv_run[conversation_id] = conv_run + 1
+    if store.count_conversation_responded_today(conversation_id) >= REPLY_CONV_DAILY_CAP:
+        return False, "CONV_CAP"
 
     return True, None
-
-
-def check_caps_and_dup(tweet: dict) -> tuple[bool, str | None]:
-    """하위호환 래퍼 (기존 호출부·테스트 보존). in-run 계수 없음."""
-    return check_and_admit(tweet, None)

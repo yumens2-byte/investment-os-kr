@@ -53,7 +53,6 @@ def test_fetch_mentions_parses_response():
         "conversation_id": "300",
         "in_reply_to_user_id": "111",
         "created_at": tweet.created_at,
-        "parent_text": "",     # R-12: referenced_tweets 없음 → 빈 문자열
     }
     assert result["users"]["222"]["followers"] == 42
 
@@ -76,7 +75,8 @@ def test_post_reply_no_retry():
             calls["n"] += 1
             raise RuntimeError("timeout")
 
-    assert x_client.post_reply(_Client(), "감사합니다", "100") is None
+    tweet_id, err = x_client.post_reply(_Client(), "감사합니다", "100")
+    assert tweet_id is None and "timeout" in err
     assert calls["n"] == 1  # 재시도 없음 (승인 E)
 
 
@@ -103,13 +103,6 @@ class _MemStore:
             monkeypatch.setattr(mod, "history_exists", lambda tid: tid in self.history)
             monkeypatch.setattr(mod, "count_author_responded_today", lambda _a: 0)
             monkeypatch.setattr(mod, "count_conversation_responded_today", lambda _c: 0)
-            # R-5 (2026-08-30): 배치 조회 3종 — 미패치 시 실 Supabase 호출 발생
-            monkeypatch.setattr(
-                mod, "history_exists_bulk",
-                lambda ids: {i for i in ids if i in self.history},
-            )
-            monkeypatch.setattr(mod, "count_author_responded_today_bulk", lambda _ids: {})
-            monkeypatch.setattr(mod, "count_conversation_responded_today_bulk", lambda _ids: {})
         monkeypatch.setattr(store, "insert_history", self._insert)
         monkeypatch.setattr(store, "mark_responded", self._mark)
         monkeypatch.setattr(store, "count_responded_today", lambda: self.responded_count)
@@ -175,7 +168,7 @@ def _install_x(monkeypatch, published: list, fetch_success=True):
     monkeypatch.setattr(
         x_client,
         "post_reply",
-        lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
+        lambda _c, text, tid: (published.append((tid, text)), (f"resp-{tid}", None))[1],
     )
     # P-1: 대화 루트 전부 내 계정(111) 소유로 목킹 (스코프 테스트는 별도 파일에서 수행)
     monkeypatch.setattr(

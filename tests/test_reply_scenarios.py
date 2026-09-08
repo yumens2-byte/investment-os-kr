@@ -119,7 +119,7 @@ def test_s05_partial_daily_cap(monkeypatch):
     )
     monkeypatch.setattr(
         x_client, "post_reply",
-        lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
+        lambda _c, text, tid: (published.append((tid, text)), (f"resp-{tid}", None))[1],
     )
     from reply_engine import generator
 
@@ -165,7 +165,7 @@ def test_s06_within_batch_similarity(monkeypatch):
     )
     monkeypatch.setattr(
         x_client, "post_reply",
-        lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
+        lambda _c, text, tid: (published.append((tid, text)), (f"resp-{tid}", None))[1],
     )
     from reply_engine import generator
 
@@ -251,10 +251,12 @@ def test_s08_publish_fail_records_reason(monkeypatch):
     updated: list = []
     monkeypatch.setattr(
         store, "update_skip_reason",
-        lambda tid, reason: updated.append((tid, reason)) or True,
+        lambda tid, reason, error_message=None: updated.append((tid, reason)) or True,
     )
     _install_x(monkeypatch, [])
-    monkeypatch.setattr(x_client, "post_reply", lambda _c, _t, _tid: None)  # 발행 실패
+    monkeypatch.setattr(
+        x_client, "post_reply", lambda _c, _t, _tid: (None, "500 Internal Error")
+    )  # 발행 실패
 
     result = run_reply.main()
     assert result["published"] == 0
@@ -324,5 +326,5 @@ def test_s13_shadow_gate_fail_recorded(monkeypatch):
 
 def test_pipeline_versions_bumped():
     """R-1/R-2 + B 시리즈 보완 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.5.0"
+    assert run_reply.VERSION == "1.4.0"
     assert store.VERSION == "1.2.0"

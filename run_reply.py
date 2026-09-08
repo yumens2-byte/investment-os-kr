@@ -20,24 +20,6 @@ X Reply Engine — 메인 파이프라인 (v1.0.0)
 [중복 방지 6층]
   L1 history PK / L2 Supabase 커서 / L3 yml concurrency /
   L4 사용자 상한 / L5 대화 상한 / L6 텍스트 유사도
-
-v1.3.0 (2026-08-30, R-2/R-3/R-5):
-  R-2 캡 이중 계수 — Step3 승인 시 CapContext in-run 카운터 점유,
-      발행 루프에서 실발행 기준 2차 캡 재검증 (심층 방어).
-      실사고: 동일 저자 2건 발행 (REPLY_AUTHOR_DAILY_CAP=1 위반).
-  R-3 수집 포화 관측 — summary에 collection_saturated / oldest_id 기록.
-  R-5 배치 조회 — 정적 필터 통과분으로 CapContext 1회 구성 (DB 3쿼리 고정).
-
-v1.5.0 (2026-08-30, R-10/B):
-  R-10 user_id 무결성 — X_MY_USER_ID와 커서 캐시 불일치를 경고로 노출한다.
-       B-1 규약(변수 > 커서)상 계정 교체 시 불일치는 정상이므로 중단하지 않는다.
-       커서 정체(updated_at) 관측으로 "정상 0건"과 "이상 0건"을 구분한다.
-  B안  타인 스레드 응답 — 회당 저상한 내 허용. P-1 실사고(주객전도) 방어선을
-       해제하는 변경이므로 기본 비활성(opt-in)이며 Variables로만 켠다.
-
-v1.4.0 (2026-08-30, R-9):
-  외국어 댓글은 AI 생성 대신 정형 문구를 사용한다 (마스터 확정 C안).
-  AI 생성 대상이 0건이면 Gemini 호출이 없으므로 예산 계상도 하지 않는다.
 """
 
 from __future__ import annotations
@@ -50,27 +32,26 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from core.alert import send_admin_alert
 from reply_engine import budget as budget_mod
-from reply_engine import classifier, gate, generator, lang, store, x_client
+from reply_engine import classifier, gate, generator, store, x_client
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     PUBLISH_JITTER_MAX_SEC,
     PUBLISH_JITTER_MIN_SEC,
     PUBLISH_START_DELAY_MAX_SEC,
-    REPLY_AUTHOR_DAILY_CAP,
-    REPLY_CONV_DAILY_CAP,
-    REPLY_CURSOR_STALE_WARN_HOURS,
     REPLY_DAILY_CAP,
-    REPLY_FOREIGN_THREAD_ENABLED,
-    REPLY_FOREIGN_THREAD_RUN_CAP,
+    REPLY_LIKE_PER_DAY,
+    REPLY_LIKE_PER_RUN,
     REPLY_RECENT_COMPARE_COUNT,
     STARTUP_JITTER_MAX_SEC,
     get_mode,
     get_my_user_id,
     is_enabled,
+    is_like_enabled,
 )
 
-VERSION = "1.5.0"
+VERSION = "1.4.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -92,6 +73,7 @@ def _setup_logging() -> None:
 
 
 def _write_report(summary: dict, guard=None) -> None:
+    _alert_if_failed(summary)
     """실행 요약 JSON 리포트 (artifact 업로드 대상) — 실패해도 파이프라인 무영향.
     guard 전달 시 예산 스냅샷 포함 (B-3).
     """
@@ -108,22 +90,21 @@ def _write_report(summary: dict, guard=None) -> None:
         logger.warning(f"[Report] 리포트 저장 실패 (무시): {exc}")
 
 
-def _cursor_stale_hours(cursor: dict | None) -> int | None:
-    """
-    커서 updated_at 기준 경과 시간(시). 값이 없거나 파싱 실패 시 None (R-10).
-    관측 지표이므로 어떤 예외도 파이프라인을 중단시키지 않는다.
-    """
-    raw = (cursor or {}).get("updated_at")
-    if not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return max(0, int((datetime.now(UTC) - parsed).total_seconds() // 3600))
-    except (ValueError, TypeError) as exc:
-        logger.warning(f"[Step2] 커서 updated_at 파싱 실패 (관측 생략): {exc}")
-        return None
+_ALERT_SKIPS = ("PUBLISH_FAIL", "SPEND_CAP", "HISTORY_INSERT_FAIL")
+_ALERT_EXITS = {"EXIT_SPEND_CAP", "EXIT_FETCH_FAIL", "EXIT_NO_CREDENTIALS", "EXIT_GET_ME_FAIL"}
+
+
+def _alert_if_failed(summary: dict) -> None:
+    """실패 신호가 있을 때만 관리자 알림 (2026-09-08 항목 3). 정상 실행은 무알림."""
+    skips = summary.get("skip_reasons", {})
+    hits = {k: v for k, v in skips.items() if k in _ALERT_SKIPS}
+    exit_reason = summary.get("exit_reason")
+    if not hits and exit_reason not in _ALERT_EXITS:
+        return
+    parts = [f"[ReplyEngine v{VERSION}] mode={summary.get('mode')} exit={exit_reason}"]
+    if hits:
+        parts.append("실패: " + ", ".join(f"{k}={v}" for k, v in hits.items()))
+    send_admin_alert("\n".join(parts))
 
 
 def main() -> dict:
@@ -137,16 +118,10 @@ def main() -> dict:
         "success": False,
         "exit_reason": None,
         "collected": 0,
-        "collection_saturated": False,   # R-3: 수집 상한 포화 (미수집분 존재 가능)
-        "oldest_id": None,               # R-3: 유실 구간 사후 추적용
         "candidates": 0,
-        "non_kr_replies": 0,      # R-9: 정형 문구로 처리된 외국어 건수
-        "foreign_thread_replies": 0,   # B안: 타인 스레드 응답 건수
-        "cursor_stale_hours": None,    # R-10: 커서 정체 시간 (0건 원인 구분용)
-        "user_id_mismatch": False,     # R-10: 변수 vs 커서 캐시 불일치 경고
         "published": 0,
         "skip_reasons": {},
-        "review": [],   # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
+        "review": [],   # C-3: 건별 품질 검수 배열 (댓글/라벨/답글/결과)
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -185,34 +160,8 @@ def main() -> dict:
 
     cursor = store.get_cursor(_ACCOUNT)
     # user_id 우선순위 (B-1): X_MY_USER_ID 변수 > 커서 캐시 > get_me (읽기 1콜)
-    env_user_id = get_my_user_id()
-    cached_user_id = (cursor or {}).get("my_user_id") or ""
-
-    # R-10: 변수와 커서 캐시가 다르면 오등록 가능성을 경고한다.
-    # 중단하지는 않는다 — B-1 규약(변수 > 커서 캐시)상 계정 교체 시 불일치는
-    # 정상 시나리오이며, 중단시키면 교체 자체가 불가능해진다.
-    # 오등록이면 남의 멘션이 전건 OUT_OF_SCOPE로 걸러져 '에러 없이 0건'이 되므로,
-    # 로그와 리포트에 흔적을 남겨 조기 발견을 돕는 것이 목적이다.
-    user_id_mismatch = bool(env_user_id and cached_user_id and env_user_id != cached_user_id)
-    summary["user_id_mismatch"] = user_id_mismatch
-    if user_id_mismatch:
-        logger.warning(
-            f"[Step2] user_id 불일치 — X_MY_USER_ID={env_user_id} vs "
-            f"커서 캐시={cached_user_id}. 계정 교체가 아니라면 변수 오등록이다 (R-10)"
-        )
-
-    my_user_id = env_user_id or cached_user_id
+    my_user_id = get_my_user_id() or (cursor or {}).get("my_user_id") or ""
     since_id = (cursor or {}).get("since_id") or None
-
-    # R-10: 커서는 신규 멘션이 있을 때만 전진한다. 정체가 길면 '정상 0건'이 아니라
-    # 수집 경로 이상일 수 있으므로 관측 지표로 남긴다 (읽기 콜 0).
-    stale_hours = _cursor_stale_hours(cursor)
-    summary["cursor_stale_hours"] = stale_hours
-    if stale_hours is not None and stale_hours >= REPLY_CURSOR_STALE_WARN_HOURS:
-        logger.warning(
-            f"[Step2] 커서 {stale_hours}시간째 미전진 — 장시간 신규 멘션 없음. "
-            "X_MY_USER_ID 및 계정 상태 점검 권장 (R-10)"
-        )
 
     if my_user_id:
         logger.info(f"[Step2] user_id 확보 (get_me 생략): {my_user_id}")
@@ -253,8 +202,6 @@ def main() -> dict:
     tweets = fetched["tweets"]
     users = fetched["users"]
     summary["collected"] = len(tweets)
-    summary["collection_saturated"] = bool(fetched.get("saturated", False))   # R-3
-    summary["oldest_id"] = fetched.get("oldest_id")
     logger.info(f"[Step2] 수집 {len(tweets)}건")
 
     # 커서 전진 (L2) — dry_run은 미전진
@@ -269,12 +216,76 @@ def main() -> dict:
         _write_report(summary, guard)
         return summary
 
-    # ── Step 3: 필터 ──────────────────────────────────────────
     blacklist = store.get_blacklist_ids()
 
-    # R-5: 정적 필터를 먼저 통과시킨 뒤 배치 스냅샷을 1회 구성 (DB 3쿼리 고정).
-    # 기존에는 후보 N건 × 3쿼리 순차 실행이었다.
-    static_ok: list[dict] = []
+    # ── Step 2.5: LIKE 전건 처리 (2026-08-26 승인) ─────────────
+    # 정책: 조회 전건 좋아요 — 분류·게이트 없음 (답글 파이프라인과 독립, 실패해도 무영향).
+    # 제외 3종만: SELF / 블랙리스트 / 기좋아요(L1). 무재시도, 성공 시에만 이력 기록.
+    summary["likes"] = {"targets": 0, "liked": 0, "skipped": {}}
+    if is_like_enabled():
+        like_pool = [
+            t for t in tweets
+            if t["author_id"] != my_user_id and t["author_id"] not in blacklist
+        ]
+        already = (
+            store.get_existing_like_ids([t["id"] for t in like_pool])
+            if db_write_allowed else set()
+        )
+        like_targets = [t for t in like_pool if t["id"] not in already]
+        summary["likes"]["targets"] = len(like_targets)
+        summary["likes"]["skipped"]["ALREADY"] = len(like_pool) - len(like_targets)
+
+        liked_today = store.count_likes_today() if db_write_allowed else 0
+        liked_this_run = 0
+        like_spend_cap = False
+        for t in like_targets:
+            if like_spend_cap or liked_this_run >= REPLY_LIKE_PER_RUN:
+                summary["likes"]["skipped"]["RUN_CAP"] = (
+                    summary["likes"]["skipped"].get("RUN_CAP", 0) + 1
+                )
+                continue
+            if liked_today + liked_this_run >= REPLY_LIKE_PER_DAY:
+                summary["likes"]["skipped"]["DAY_CAP"] = (
+                    summary["likes"]["skipped"].get("DAY_CAP", 0) + 1
+                )
+                continue
+
+            if mode == "dry_run":
+                logger.info(f"[LIKE][DRY_RUN] would like: {t['id']}")
+                liked_this_run += 1
+                continue
+
+            record = {
+                "reply_tweet_id": t["id"],
+                "author_id": t["author_id"],
+                "mode": mode,
+                "would_like": True,
+            }
+            if mode == "shadow":
+                if store.insert_like(record):
+                    liked_this_run += 1
+                continue
+
+            # live: 실행 → 성공 시에만 기록 (실패 건은 다음 실행에서 자연 재대상)
+            ok, like_error = x_client.post_like(client, t["id"])
+            if ok:
+                record["liked_at"] = datetime.now(UTC).isoformat()
+                store.insert_like(record)
+                liked_this_run += 1
+                time.sleep(random.randint(2, 8))   # 안티봇 소지연
+            elif x_client.is_spend_cap_error(like_error):
+                logger.error("[LIKE] spend cap 도달 — 잔여 좋아요 중단 (N-1)")
+                like_spend_cap = True
+                summary["likes"]["spend_cap"] = True
+            else:
+                summary["likes"]["skipped"]["FAIL"] = (
+                    summary["likes"]["skipped"].get("FAIL", 0) + 1
+                )
+        summary["likes"]["liked"] = liked_this_run
+        logger.info(f"[Step2.5] LIKE 완료 | {summary['likes']}")
+
+    # ── Step 3: 필터 ──────────────────────────────────────────
+    candidates: list[dict] = []
     for tweet in tweets:
         passed, reason = filter_mod.check_tweet(
             tweet, users.get(tweet["author_id"]), my_user_id, blacklist
@@ -282,14 +293,7 @@ def main() -> dict:
         if not passed:
             _skip(tweet["id"], reason)
             continue
-        static_ok.append(tweet)
-
-    cap_ctx = filter_mod.build_cap_context(static_ok) if static_ok else None
-
-    # R-2: check_and_admit은 통과 시 in-run 카운터를 점유한다 (부수효과).
-    candidates: list[dict] = []
-    for tweet in static_ok:
-        passed, reason = filter_mod.check_and_admit(tweet, cap_ctx)
+        passed, reason = filter_mod.check_caps_and_dup(tweet)
         if not passed:
             _skip(tweet["id"], reason)
             continue
@@ -310,31 +314,16 @@ def main() -> dict:
             logger.warning("[Step3.5] 읽기 예산 부족 — 루트 미검증 후보 전량 보수적 스킵")
 
         verified: list[dict] = []
-        foreign_admitted = 0
         for tweet in candidates:
             root_author = (roots or {}).get(tweet["conversation_id"])
             if roots is None or root_author is None:
                 _skip(tweet["id"], "THREAD_UNVERIFIED")   # 조회 실패/루트 삭제 → 보수적 스킵
             elif root_author != my_user_id:
-                # B안 (2026-08-30): 이 건은 in_reply_to_user_id == 나를 이미 통과했다.
-                # 즉 '나에게 직접 말을 건' 댓글이며, 원 게시글만 타인 것이다.
-                # 남의 스레드 자동 답글은 스팸으로 비칠 수 있어 회당 저상한을 둔다.
-                if not REPLY_FOREIGN_THREAD_ENABLED:
-                    _skip(tweet["id"], "OUT_OF_SCOPE_THREAD")
-                elif foreign_admitted >= REPLY_FOREIGN_THREAD_RUN_CAP:
-                    _skip(tweet["id"], "FOREIGN_THREAD_CAP")
-                else:
-                    foreign_admitted += 1
-                    tweet["foreign_thread"] = True
-                    verified.append(tweet)
+                _skip(tweet["id"], "OUT_OF_SCOPE_THREAD")  # 타인 글 스레드 → 응답 금지
             else:
                 verified.append(tweet)
         candidates = verified
-        summary["foreign_thread_replies"] = foreign_admitted
-        logger.info(
-            f"[Step3.5] 루트 검증 통과 {len(candidates)}건 "
-            f"(타인 스레드 {foreign_admitted}건)"
-        )
+        logger.info(f"[Step3.5] 루트 검증 통과 {len(candidates)}건")
 
     summary["candidates"] = len(candidates)
 
@@ -352,67 +341,31 @@ def main() -> dict:
                 pass_items.append({**tweet, "label": label})
             else:
                 _skip(tweet["id"], f"CLASS_{label}")
-                # C-4 (v1.2.1, 2026-08-27): 분류 스킵 건도 review에 기록 —
-                # artifact만으로 분류 품질(오판 여부) 검수 가능하게 함.
-                # 스키마는 기존 review_entry와 동일 (reply_text 없음 → None).
-                summary["review"].append({
-                    "reply_tweet_id": tweet["id"],
-                    "comment_preview": tweet["text"][:100],
-                    "label": label,
-                    "reply_text": None,
-                    "result": f"CLASS_{label}",
-                })
 
     logger.info(f"[Step4] 분류 통과 {len(pass_items)}건")
 
     # ── Step 5: 생성 ──────────────────────────────────────────
     replies: dict[str, str] = {}
     if pass_items:
-        # R-9: 외국어 건은 generator가 정형 문구로 처리하므로 Gemini 호출 대상이 아니다.
-        #      AI 대상이 0건이면 실제 호출이 없으므로 예산도 계상하지 않는다.
-        non_kr_ids = [t["id"] for t in pass_items if lang.is_non_korean(t["text"])]
-        summary["non_kr_replies"] = len(non_kr_ids)
-
         replies = generator.generate_batch(
-            [
-                {
-                    "id": t["id"],
-                    "text": t["text"],
-                    "label": t["label"],
-                    "parent_text": t.get("parent_text", ""),   # R-12
-                }
-                for t in pass_items
-            ]
+            [{"id": t["id"], "text": t["text"], "label": t["label"]} for t in pass_items]
         )
-        if len(non_kr_ids) < len(pass_items):
-            guard.record_gemini()
-        else:
-            logger.info("[Step5] 전건 외국어 — Gemini 생성 호출 없음 (R-9)")
+        guard.record_gemini()
 
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
     responded_today = store.count_responded_today()
     published_this_run = 0
-    # R-2: 실발행 기준 2차 캡. Step3 승인 시점에 이미 상한이 걸리지만,
-    # 게이트 탈락·발행 실패로 승인≠발행이 되는 경로가 있어 심층 방어로 재계수한다.
-    published_author_run: dict[str, int] = {}
-    published_conv_run: dict[str, int] = {}
     first_publish_delayed = False   # 첫 발행 직전 1회 랜덤 딜레이 (안티봇, 2026-08-17)
 
     for idx, tweet in enumerate(pass_items):
         tweet_id = tweet["id"]
-        author_id = tweet["author_id"]
-        conversation_id = tweet["conversation_id"]
         reply_text = (replies.get(tweet_id) or "").strip()
 
-        # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
+        # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — R-2 감사추적)
         skip_reason: str | None = None
         if responded_today + published_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
-        elif published_author_run.get(author_id, 0) >= REPLY_AUTHOR_DAILY_CAP:
-            skip_reason = "AUTHOR_CAP_RUN"      # R-2 2차 방어선
-        elif published_conv_run.get(conversation_id, 0) >= REPLY_CONV_DAILY_CAP:
-            skip_reason = "CONV_CAP_RUN"        # R-2 2차 방어선
         else:
             gate_ok, gate_reason = gate.check_reply(
                 reply_text, recent_texts, comment_text=tweet["text"]
@@ -438,9 +391,9 @@ def main() -> dict:
         # 이력 기록 (L1) — dry_run은 DB 쓰기 금지
         record = {
             "reply_tweet_id": tweet_id,
-            "conversation_id": conversation_id,
-            "author_id": author_id,
-            "author_username": users.get(author_id, {}).get("username", ""),
+            "conversation_id": tweet["conversation_id"],
+            "author_id": tweet["author_id"],
+            "author_username": users.get(tweet["author_id"], {}).get("username", ""),
             "comment_text": tweet["text"][:500],
             "classification": tweet["label"],
             "responded": False,
@@ -456,8 +409,6 @@ def main() -> dict:
             "comment_preview": tweet["text"][:100],
             "label": tweet["label"],
             "reply_text": reply_text,
-            "source": "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI",
-            "foreign_thread": bool(tweet.get("foreign_thread")),
             "result": None,
         }
         summary["review"].append(review_entry)
@@ -479,9 +430,6 @@ def main() -> dict:
             review_entry["result"] = "SIMULATED"
             recent_texts.append(reply_text)
             published_this_run += 1
-            # R-2: shadow에서도 캡이 실동작해야 검수가 유효하다
-            published_author_run[author_id] = published_author_run.get(author_id, 0) + 1
-            published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
             continue
 
         # live: 첫 발행 직전 랜덤 딜레이 0~PUBLISH_START_DELAY_MAX_SEC (안티봇)
@@ -493,7 +441,7 @@ def main() -> dict:
             time.sleep(delay)
 
         # live: 발행 → 즉시 기록 (발행-기록 짝)
-        response_tweet_id = x_client.post_reply(client, reply_text, tweet_id)
+        response_tweet_id, publish_error = x_client.post_reply(client, reply_text, tweet_id)
         guard.record_write()
         store.upsert_budget(guard.row)  # V-1: 발행마다 즉시 저장 (timeout 킬 시 집계 유실 방지)
 
@@ -502,13 +450,14 @@ def main() -> dict:
             review_entry["result"] = "PUBLISHED"
             recent_texts.append(reply_text)
             published_this_run += 1
-            # R-2: 실발행 기준 캡 계수 (동일 저자·대화 중복 발행 차단)
-            published_author_run[author_id] = published_author_run.get(author_id, 0) + 1
-            published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
         else:
-            store.update_skip_reason(tweet_id, "PUBLISH_FAIL")  # 사유 사후 기록 (R-2)
-            review_entry["result"] = "PUBLISH_FAIL"
-            _skip(tweet_id, "PUBLISH_FAIL")
+            # R-2 사유 사후 기록 + 2026-09-08: 오류 원문 저장, spend cap 구분 (N-1)
+            fail_reason = (
+                "SPEND_CAP" if x_client.is_spend_cap_error(publish_error) else "PUBLISH_FAIL"
+            )
+            store.update_skip_reason(tweet_id, fail_reason, error_message=publish_error)
+            review_entry["result"] = fail_reason
+            _skip(tweet_id, fail_reason)
 
         # 발행 간 지터 (마지막 건 제외)
         if idx < len(pass_items) - 1:
