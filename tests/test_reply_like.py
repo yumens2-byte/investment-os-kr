@@ -242,7 +242,7 @@ def test_like_insert_fail_not_counted(monkeypatch):
 
 
 def test_like_versions():
-    assert run_reply.VERSION == "1.4.0"
-    assert config.VERSION == "1.0.7"
+    assert run_reply.VERSION == "1.5.0"
+    assert config.VERSION == "1.4.0"
     assert store.VERSION == "1.2.0"
     assert x_client.VERSION == "1.4.0"
