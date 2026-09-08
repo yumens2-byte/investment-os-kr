@@ -105,9 +105,9 @@ jobs:
           # 운영 제어 (GitHub Variables — HG-1/HG-3)
           REPLY_ENABLED:          ${{ vars.REPLY_ENABLED }}
           REPLY_MODE:             ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
+          # v1.0.6 (2026-08-27): 일일 답글 상한 운영값 — 미등록 시 코드 기본값 8 (env_int 안전 파서)
+          REPLY_DAILY_CAP:        ${{ vars.REPLY_DAILY_CAP }}
           DAILY_BUDGET_KRW:       ${{ vars.DAILY_BUDGET_KRW }}
-          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
           X_READ_COST_KRW:        ${{ vars.X_READ_COST_KRW }}
           X_WRITE_COST_KRW:       ${{ vars.X_WRITE_COST_KRW }}
           X_MY_USER_ID:           ${{ vars.X_MY_USER_ID }}
@@ -115,18 +115,6 @@ jobs:
         run: python run_reply.py
 
       # 실행 리포트 artifact (모드 무관 — shadow/live 검수용, HG-2/HG-4)
-      - name: 실패 알림 (job 크래시 — 코드 내 훅이 못 잡는 경우)
-        if: failure()
-        env:
-          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TG_CHAT: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
-        run: |
-          if [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-              -d chat_id="${TG_CHAT}" \
-              -d text="[ReplyEngine] Actions job 실패 — run ${{ github.run_id }} 확인 필요" >/dev/null || true
-          fi
-
       - name: Upload run report
         if: always()
         uses: actions/upload-artifact@v4
