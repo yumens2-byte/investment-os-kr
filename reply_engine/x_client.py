@@ -237,6 +237,16 @@ def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:
         return False, str(exc)
 
 
+def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:
+    """좋아요 1건을 수행하며 호출부의 오류 분류를 위해 원문을 돌려준다."""
+    try:
+        client.like(tweet_id, user_auth=True)
+        return True, None
+    except Exception as exc:
+        logger.error(f"[XClient] 좋아요 실패: {exc}")
+        return False, str(exc)
+
+
 def fetch_conversation_roots(
     client: tweepy.Client,
     conversation_ids: list[str],
