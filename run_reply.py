@@ -32,7 +32,6 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from core.alert import send_admin_alert
 from reply_engine import budget as budget_mod
 from reply_engine import classifier, gate, generator, store, x_client
 from reply_engine import filter as filter_mod
@@ -41,17 +40,14 @@ from reply_engine.config import (
     PUBLISH_JITTER_MIN_SEC,
     PUBLISH_START_DELAY_MAX_SEC,
     REPLY_DAILY_CAP,
-    REPLY_LIKE_PER_DAY,
-    REPLY_LIKE_PER_RUN,
     REPLY_RECENT_COMPARE_COUNT,
     STARTUP_JITTER_MAX_SEC,
     get_mode,
     get_my_user_id,
     is_enabled,
-    is_like_enabled,
 )
 
-VERSION = "1.4.0"
+VERSION = "1.2.1"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -73,7 +69,6 @@ def _setup_logging() -> None:
 
 
 def _write_report(summary: dict, guard=None) -> None:
-    _alert_if_failed(summary)
     """실행 요약 JSON 리포트 (artifact 업로드 대상) — 실패해도 파이프라인 무영향.
     guard 전달 시 예산 스냅샷 포함 (B-3).
     """
@@ -90,23 +85,6 @@ def _write_report(summary: dict, guard=None) -> None:
         logger.warning(f"[Report] 리포트 저장 실패 (무시): {exc}")
 
 
-_ALERT_SKIPS = ("PUBLISH_FAIL", "SPEND_CAP", "HISTORY_INSERT_FAIL")
-_ALERT_EXITS = {"EXIT_SPEND_CAP", "EXIT_FETCH_FAIL", "EXIT_NO_CREDENTIALS", "EXIT_GET_ME_FAIL"}
-
-
-def _alert_if_failed(summary: dict) -> None:
-    """실패 신호가 있을 때만 관리자 알림 (2026-09-08 항목 3). 정상 실행은 무알림."""
-    skips = summary.get("skip_reasons", {})
-    hits = {k: v for k, v in skips.items() if k in _ALERT_SKIPS}
-    exit_reason = summary.get("exit_reason")
-    if not hits and exit_reason not in _ALERT_EXITS:
-        return
-    parts = [f"[ReplyEngine v{VERSION}] mode={summary.get('mode')} exit={exit_reason}"]
-    if hits:
-        parts.append("실패: " + ", ".join(f"{k}={v}" for k, v in hits.items()))
-    send_admin_alert("\n".join(parts))
-
-
 def main() -> dict:
     _setup_logging()
     mode = get_mode()
@@ -121,7 +99,7 @@ def main() -> dict:
         "candidates": 0,
         "published": 0,
         "skip_reasons": {},
-        "review": [],   # C-3: 건별 품질 검수 배열 (댓글/라벨/답글/결과)
+        "review": [],   # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -216,75 +194,8 @@ def main() -> dict:
         _write_report(summary, guard)
         return summary
 
-    blacklist = store.get_blacklist_ids()
-
-    # ── Step 2.5: LIKE 전건 처리 (2026-08-26 승인) ─────────────
-    # 정책: 조회 전건 좋아요 — 분류·게이트 없음 (답글 파이프라인과 독립, 실패해도 무영향).
-    # 제외 3종만: SELF / 블랙리스트 / 기좋아요(L1). 무재시도, 성공 시에만 이력 기록.
-    summary["likes"] = {"targets": 0, "liked": 0, "skipped": {}}
-    if is_like_enabled():
-        like_pool = [
-            t for t in tweets
-            if t["author_id"] != my_user_id and t["author_id"] not in blacklist
-        ]
-        already = (
-            store.get_existing_like_ids([t["id"] for t in like_pool])
-            if db_write_allowed else set()
-        )
-        like_targets = [t for t in like_pool if t["id"] not in already]
-        summary["likes"]["targets"] = len(like_targets)
-        summary["likes"]["skipped"]["ALREADY"] = len(like_pool) - len(like_targets)
-
-        liked_today = store.count_likes_today() if db_write_allowed else 0
-        liked_this_run = 0
-        like_spend_cap = False
-        for t in like_targets:
-            if like_spend_cap or liked_this_run >= REPLY_LIKE_PER_RUN:
-                summary["likes"]["skipped"]["RUN_CAP"] = (
-                    summary["likes"]["skipped"].get("RUN_CAP", 0) + 1
-                )
-                continue
-            if liked_today + liked_this_run >= REPLY_LIKE_PER_DAY:
-                summary["likes"]["skipped"]["DAY_CAP"] = (
-                    summary["likes"]["skipped"].get("DAY_CAP", 0) + 1
-                )
-                continue
-
-            if mode == "dry_run":
-                logger.info(f"[LIKE][DRY_RUN] would like: {t['id']}")
-                liked_this_run += 1
-                continue
-
-            record = {
-                "reply_tweet_id": t["id"],
-                "author_id": t["author_id"],
-                "mode": mode,
-                "would_like": True,
-            }
-            if mode == "shadow":
-                if store.insert_like(record):
-                    liked_this_run += 1
-                continue
-
-            # live: 실행 → 성공 시에만 기록 (실패 건은 다음 실행에서 자연 재대상)
-            ok, like_error = x_client.post_like(client, t["id"])
-            if ok:
-                record["liked_at"] = datetime.now(UTC).isoformat()
-                store.insert_like(record)
-                liked_this_run += 1
-                time.sleep(random.randint(2, 8))   # 안티봇 소지연
-            elif x_client.is_spend_cap_error(like_error):
-                logger.error("[LIKE] spend cap 도달 — 잔여 좋아요 중단 (N-1)")
-                like_spend_cap = True
-                summary["likes"]["spend_cap"] = True
-            else:
-                summary["likes"]["skipped"]["FAIL"] = (
-                    summary["likes"]["skipped"].get("FAIL", 0) + 1
-                )
-        summary["likes"]["liked"] = liked_this_run
-        logger.info(f"[Step2.5] LIKE 완료 | {summary['likes']}")
-
     # ── Step 3: 필터 ──────────────────────────────────────────
+    blacklist = store.get_blacklist_ids()
     candidates: list[dict] = []
     for tweet in tweets:
         passed, reason = filter_mod.check_tweet(
@@ -341,6 +252,16 @@ def main() -> dict:
                 pass_items.append({**tweet, "label": label})
             else:
                 _skip(tweet["id"], f"CLASS_{label}")
+                # C-4 (v1.2.1, 2026-08-27): 분류 스킵 건도 review에 기록 —
+                # artifact만으로 분류 품질(오판 여부) 검수 가능하게 함.
+                # 스키마는 기존 review_entry와 동일 (reply_text 없음 → None).
+                summary["review"].append({
+                    "reply_tweet_id": tweet["id"],
+                    "comment_preview": tweet["text"][:100],
+                    "label": label,
+                    "reply_text": None,
+                    "result": f"CLASS_{label}",
+                })
 
     logger.info(f"[Step4] 분류 통과 {len(pass_items)}건")
 
@@ -441,7 +362,7 @@ def main() -> dict:
             time.sleep(delay)
 
         # live: 발행 → 즉시 기록 (발행-기록 짝)
-        response_tweet_id, publish_error = x_client.post_reply(client, reply_text, tweet_id)
+        response_tweet_id = x_client.post_reply(client, reply_text, tweet_id)
         guard.record_write()
         store.upsert_budget(guard.row)  # V-1: 발행마다 즉시 저장 (timeout 킬 시 집계 유실 방지)
 
@@ -451,13 +372,9 @@ def main() -> dict:
             recent_texts.append(reply_text)
             published_this_run += 1
         else:
-            # R-2 사유 사후 기록 + 2026-09-08: 오류 원문 저장, spend cap 구분 (N-1)
-            fail_reason = (
-                "SPEND_CAP" if x_client.is_spend_cap_error(publish_error) else "PUBLISH_FAIL"
-            )
-            store.update_skip_reason(tweet_id, fail_reason, error_message=publish_error)
-            review_entry["result"] = fail_reason
-            _skip(tweet_id, fail_reason)
+            store.update_skip_reason(tweet_id, "PUBLISH_FAIL")  # 사유 사후 기록 (R-2)
+            review_entry["result"] = "PUBLISH_FAIL"
+            _skip(tweet_id, "PUBLISH_FAIL")
 
         # 발행 간 지터 (마지막 건 제외)
         if idx < len(pass_items) - 1:

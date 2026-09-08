@@ -1,4 +1,4 @@
-# investment-os-kr — X Reply Engine v1.4.0 (live 운영) · Following/Shock 중단
+# investment-os-kr — X Reply Engine v1.1.2 + Following Agent v1.0.0
 
 **전환일**: 2026-08-17 | **역할 1 (INBOUND_REPLY)**: 내 게시글 댓글 자동 호응 답글 (`run_reply.py`, reply_engine/)
 **역할 2 (FOLLOWING_ENGAGEMENT, 2026-08-20)**: 팔로잉 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 (`run_following.py`, following_engine/) — 초기 배포 `FOLLOWING_ENABLED=false` + dry_run, LIVE 허용 액션은 QUOTE만 (자동 Reply 금지)

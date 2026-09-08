@@ -19,6 +19,7 @@ import types
 
 import pytest
 
+
 _STUB_KEYS = [
     "collectors",
     "collectors.kr_fred_client",

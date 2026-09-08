@@ -88,7 +88,7 @@ def test_f2_pipeline_recovers_coverage(monkeypatch):
     )
     monkeypatch.setattr(
         x_client, "post_reply",
-        lambda _c, text, tid: (published.append((tid, text)), (f"resp-{tid}", None))[1],
+        lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
     )
     same = "의견 감사합니다"  # 실측 연쇄 생성 문구
     monkeypatch.setattr(
@@ -134,7 +134,7 @@ def test_f2_fallback_failure_still_skips(monkeypatch):
     )
     monkeypatch.setattr(
         x_client, "post_reply",
-        lambda _c, text, tid: (published.append((tid, text)), (f"resp-{tid}", None))[1],
+        lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
     )
     pool_text = generator.pick_fallback("POSITIVE", "701")
     monkeypatch.setattr(
@@ -152,6 +152,6 @@ def test_f2_fallback_failure_still_skips(monkeypatch):
 
 def test_versions_bumped_f_series():
     """F-1/F-2 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.4.0"
+    assert run_reply.VERSION == "1.2.1"
     assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.2.1"
+    assert generator.VERSION == "1.2.0"

@@ -34,7 +34,7 @@ from reply_engine.config import (
     SPAM_KEYWORDS,
 )
 
-VERSION = "1.1.0"
+VERSION = "1.0.0"
 
 logger = logging.getLogger(__name__)
 
@@ -54,23 +54,6 @@ def _to_aware_utc(value) -> datetime | None:
         except ValueError:
             return None
     return None
-
-
-_KO_CHAR = re.compile(r"[가-힣ㄱ-ㅎㅏ-ㅣ]")
-KOREAN_RATIO_THRESHOLD: float = 0.3
-
-
-def is_korean_dominant(body: str) -> bool:
-    """
-    문자(알파벳류) 중 한글 비율이 임계 이상이면 True (Q-1).
-    - 문자가 하나도 없으면(이모지·기호·숫자만) True — 기존 필터/분류에 위임
-    - 자모(ㅋㅋ/ㅇㅈ)도 한글로 계산
-    """
-    letters = [ch for ch in body if ch.isalpha()]
-    if not letters:
-        return True
-    korean = sum(1 for ch in letters if _KO_CHAR.match(ch))
-    return korean / len(letters) >= KOREAN_RATIO_THRESHOLD
 
 
 def check_tweet(
@@ -111,9 +94,6 @@ def check_tweet(
         return False, "TOO_SHORT"
     if _URL_PATTERN.search(text):
         return False, "SPAM_LINK"
-    # Q-1 (2026-09-08 실사고): 베트남어 댓글에 "동의합니다"로 아는 척 응답 → 외국어는 무응답
-    if not is_korean_dominant(body):
-        return False, "SKIP_FOREIGN"
     for kw in SPAM_KEYWORDS:
         if kw in text:
             return False, "SPAM_KEYWORD"

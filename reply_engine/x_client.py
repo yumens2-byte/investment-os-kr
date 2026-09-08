@@ -24,7 +24,7 @@ import tweepy
 
 from reply_engine.config import MENTIONS_MAX_RESULTS
 
-VERSION = "1.4.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -131,12 +131,10 @@ def fetch_mentions(
             "error": None}
 
 
-def post_reply(
-    client: tweepy.Client, text: str, in_reply_to_tweet_id: str
-) -> tuple[str | None, str | None]:
+def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> str | None:
     """
     답글 1건 발행. 재시도 없음 (승인 E — 타임아웃 후 재시도 시 이중 답글 리스크).
-    반환: (tweet_id | None, 오류 문자열 | None) — 2026-09-08 오류 원문 DB 저장용.
+    성공 시 tweet_id, 실패 시 None.
     """
     try:
         resp = client.create_tweet(
@@ -146,10 +144,10 @@ def post_reply(
         )
         tweet_id = str(resp.data["id"])
         logger.info(f"[XClient] 답글 발행 완료: {tweet_id} → reply_to={in_reply_to_tweet_id}")
-        return tweet_id, None
+        return tweet_id
     except Exception as exc:
         logger.error(f"[XClient] 답글 발행 실패 (재시도 없음): {exc}")
-        return None, str(exc)
+        return None
 
 
 def fetch_conversation_roots(
@@ -197,17 +195,3 @@ def is_spend_cap_error(error_text: str | None) -> bool:
         return False
     lowered = str(error_text).lower()
     return any(marker in lowered for marker in _SPEND_CAP_MARKERS)
-
-
-def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:
-    """
-    댓글 좋아요 1건 (2026-08-26 승인 — LIKE 기능). 단일 시도, 무재시도.
-    X의 like는 멱등이라 이중 호출도 무해하나, 이력(L1)으로 낭비 호출을 막는다.
-    반환: (성공 여부, 오류 문자열|None) — spend cap 구분용 (N-1 규약).
-    """
-    try:
-        client.like(tweet_id, user_auth=True)
-        return True, None
-    except Exception as exc:
-        logger.warning(f"[XClient] 좋아요 실패 (재시도 없음): {tweet_id} | {exc}")
-        return False, str(exc)

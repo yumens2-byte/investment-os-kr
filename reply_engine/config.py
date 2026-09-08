@@ -9,13 +9,18 @@ X Reply Engine 설정 상수 (config/settings.py 무수정 원칙 — 독립 관
   DAILY_BUDGET_KRW  — 일일 비용 상한 (기본 1000)
   X_READ_COST_KRW   — X 읽기 1콜 단가 (미설정 시 count 모드 fallback)
   X_WRITE_COST_KRW  — X 쓰기 1콜 단가 (미설정 시 count 모드 fallback)
+  REPLY_DAILY_CAP   — 일일 답글 상한 (기본 8, 운영값은 GitHub Variables로 관리)
+
+v1.0.6 (2026-08-27): 정책 상수 원복 — 운영 상한 변경은 코드가 아닌
+  GitHub Variables(REPLY_DAILY_CAP)로 관리 (테스트 게이트 6건 실패 원인 해소).
+  FALLBACK 상수는 단가 미설정 시 비상 보수 경로이므로 저상한(16/5) 유지.
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "1.0.7"
+VERSION = "1.0.6"
 
 
 def env_int(name: str, default: int) -> int:
@@ -35,7 +40,7 @@ def env_int(name: str, default: int) -> int:
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
 # ---------------------------------------------------------------------------
-REPLY_DAILY_CAP: int = env_int("REPLY_DAILY_CAP", 8)          # 일일 답글 상한
+REPLY_DAILY_CAP: int = env_int("REPLY_DAILY_CAP", 8)           # 일일 답글 상한 (운영값: Variables)
 REPLY_AUTHOR_DAILY_CAP: int = env_int("REPLY_AUTHOR_DAILY_CAP", 1)  # 사용자별/일
 REPLY_CONV_DAILY_CAP: int = env_int("REPLY_CONV_DAILY_CAP", 3)      # 대화별/일
 REPLY_MAX_AGE_HOURS: int = env_int("REPLY_MAX_AGE_HOURS", 24)  # 폐기 (승인 D)
@@ -49,20 +54,6 @@ REPLY_RECENT_COMPARE_COUNT: int = 30      # 유사도 비교 대상 최근 발�
 PUBLISH_JITTER_MIN_SEC: int = 40
 PUBLISH_JITTER_MAX_SEC: int = 180
 
-# ── LIKE 기능 (2026-08-26 승인) ──
-# 정책: 조회된 댓글 전건 좋아요 (분류·게이트 없음). 제외는 SELF/블랙리스트/기좋아요뿐.
-REPLY_LIKE_PER_RUN: int = env_int("REPLY_LIKE_PER_RUN", 20)
-REPLY_LIKE_PER_DAY: int = env_int("REPLY_LIKE_PER_DAY", 50)
-
-
-def is_like_enabled() -> bool:
-    """
-    REPLY_LIKE_ENABLED — 기본 **false** (opt-in). 'true' 명시 시에만 활성.
-    2026-09-08: 미사용 결정된 기능이 ZIP 재반영만으로 켜지는 잠복 리스크 제거.
-    """
-    return os.environ.get("REPLY_LIKE_ENABLED", "").strip().lower() == "true"
-
-
 # 실행 시작 지터 (초) — live 모드 전용
 STARTUP_JITTER_MAX_SEC: int = 300
 
@@ -73,7 +64,7 @@ PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 # ---------------------------------------------------------------------------
 # 수집 설정
 # ---------------------------------------------------------------------------
-MENTIONS_MAX_RESULTS: int = 50      # get_users_mentions 1콜 수집량 (5~100)
+MENTIONS_MAX_RESULTS: int = 5      # get_users_mentions 1콜 수집량 (5~100)
 
 # ---------------------------------------------------------------------------
 # 예산 count 모드 fallback 상한 (단가 미설정 시)

@@ -19,7 +19,7 @@ import logging
 from core.gemini_gateway import call as gemini_call
 from reply_engine.config import REPLY_MAX_LENGTH
 
-VERSION = "1.2.1"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,7 @@ def generate_batch(items: list[dict]) -> dict[str, str]:
         "기계적인 '~합니다.' 종결만 반복하지 말 것\n"
         "9. 해시태그·링크·자기소개 금지. 이모지는 0~2개 — 답글 절반 이상에 "
         "자연스럽게 넣되 매번 같은 이모지 금지 (🙂만 반복 금지)\n"
-        "10. 답글끼리 표현이 겹치지 않게 각각 다르게 — 서로 다른 단어로 시작하라\n"
-        "11. 선택형(A/B 투표) 댓글에는 특정 선택지에 동조하지 말고 '의견 감사' 류 중립 감사만\n\n"
+        "10. 답글끼리 표현이 겹치지 않게 각각 다르게 — 서로 다른 단어로 시작하라\n\n"
         "예시 (좋음/나쁨):\n"
         '- 댓글 "가자 돈복사!!!" (시장 환호) → 좋음: "오늘도 같이 가보시죠 ㅎㅎ 🙌" / '
         '나쁨: "응원 감사해요" (나를 응원한 게 아닌데 감사 — 의도 오독)\n'

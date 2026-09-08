@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 
 from db.supabase_client import get_client
 
-VERSION = "1.2.0"
+VERSION = "1.0.1"
 
 logger = logging.getLogger(__name__)
 
@@ -107,19 +107,13 @@ def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
         return False
 
 
-def update_skip_reason(
-    reply_tweet_id: str, skip_reason: str, error_message: str | None = None
-) -> bool:
-    """발행 단계 실패 사유 사후 기록 (PUBLISH_FAIL 등 — 감사추적용).
-    2026-09-08: X 오류 원문(error_message)도 저장 — DB만으로 원인 구분 가능."""
-    payload: dict = {"skip_reason": skip_reason}
-    if error_message:
-        payload["error_message"] = str(error_message)[:500]
+def update_skip_reason(reply_tweet_id: str, skip_reason: str) -> bool:
+    """발행 단계 실패 사유 사후 기록 (PUBLISH_FAIL 등 — 감사추적용)."""
     try:
         result = (
             get_client()
             .table(_T_HISTORY)
-            .update(payload)
+            .update({"skip_reason": skip_reason})
             .eq("reply_tweet_id", reply_tweet_id)
             .execute()
         )
@@ -275,47 +269,3 @@ def get_blacklist_ids() -> set[str]:
     except Exception as exc:
         logger.error(f"[Store] blacklist 조회 실패: {exc}")
         return set()
-
-
-# ── LIKE 이력 (2026-08-26 승인 — kr_reply_like_history) ──────────
-
-LIKE_TABLE = "kr_reply_like_history"
-
-
-def get_existing_like_ids(tweet_ids: list[str]) -> set[str]:
-    """대상 중 기좋아요(L1) 건 집합 — 배치 1쿼리. 실패 시 보수적으로 전량 제외."""
-    if not tweet_ids:
-        return set()
-    try:
-        result = (
-            get_client().table(LIKE_TABLE).select("reply_tweet_id")
-            .in_("reply_tweet_id", tweet_ids).execute()
-        )
-        return {row["reply_tweet_id"] for row in (result.data or [])}
-    except Exception as exc:
-        logger.error(f"[Store] like 이력 조회 실패 (보수적 전량 제외): {exc}")
-        return set(tweet_ids)
-
-
-def insert_like(record: dict) -> bool:
-    """L1 최종 방어 — PK 충돌 시 False."""
-    try:
-        get_client().table(LIKE_TABLE).insert(record).execute()
-        return True
-    except Exception as exc:
-        logger.warning(f"[Store] like INSERT 실패/충돌: {exc}")
-        return False
-
-
-def count_likes_today() -> int:
-    """금일(KST) would_like 건수 — 일일 상한 판정 (shadow 시뮬 동일 기준)."""
-    try:
-        result = (
-            get_client().table(LIKE_TABLE).select("reply_tweet_id", count="exact")
-            .gte("created_at", kst_day_start_utc_iso())
-            .eq("would_like", True).execute()
-        )
-        return result.count or 0
-    except Exception as exc:
-        logger.error(f"[Store] like 일일 카운트 실패 (보수적 상한 취급): {exc}")
-        return 10**9

@@ -75,8 +75,7 @@ def test_post_reply_no_retry():
             calls["n"] += 1
             raise RuntimeError("timeout")
 
-    tweet_id, err = x_client.post_reply(_Client(), "감사합니다", "100")
-    assert tweet_id is None and "timeout" in err
+    assert x_client.post_reply(_Client(), "감사합니다", "100") is None
     assert calls["n"] == 1  # 재시도 없음 (승인 E)
 
 
@@ -168,7 +167,7 @@ def _install_x(monkeypatch, published: list, fetch_success=True):
     monkeypatch.setattr(
         x_client,
         "post_reply",
-        lambda _c, text, tid: (published.append((tid, text)), (f"resp-{tid}", None))[1],
+        lambda _c, text, tid: published.append((tid, text)) or f"resp-{tid}",
     )
     # P-1: 대화 루트 전부 내 계정(111) 소유로 목킹 (스코프 테스트는 별도 파일에서 수행)
     monkeypatch.setattr(
