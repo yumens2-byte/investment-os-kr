@@ -156,7 +156,11 @@ def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
         return False
 
 
-def update_skip_reason(reply_tweet_id: str, skip_reason: str, error_message: str | None = None) -> bool:
+def update_skip_reason(
+    reply_tweet_id: str,
+    skip_reason: str,
+    error_message: str | None = None,
+) -> bool:
     """발행 단계 실패 사유 사후 기록 (PUBLISH_FAIL 등 — 감사추적용)."""
     try:
         result = (
@@ -428,7 +432,13 @@ def get_existing_like_ids(tweet_ids: list[str]) -> set[str]:
     if not ids:
         return set()
     try:
-        rows = get_client().table(_T_LIKES).select("reply_tweet_id").in_("reply_tweet_id", ids).execute()
+        rows = (
+            get_client()
+            .table(_T_LIKES)
+            .select("reply_tweet_id")
+            .in_("reply_tweet_id", ids)
+            .execute()
+        )
         return {str(row["reply_tweet_id"]) for row in (rows.data or [])}
     except Exception as exc:
         logger.error(f"[Store] like 이력 조회 실패: {exc}")

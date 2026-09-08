@@ -51,7 +51,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from core.alert import send_admin_alert
-
 from reply_engine import budget as budget_mod
 from reply_engine import classifier, gate, generator, lang, store, x_client
 from reply_engine import filter as filter_mod
@@ -82,6 +81,10 @@ _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
 logger = logging.getLogger(__name__)
+
+# 테스트와 기존 통합 코드가 ``x_client.post_reply``를 교체하는 규약을 보존하면서,
+# 운영 기본 경로에서는 오류 원문까지 회수하기 위한 기준 참조다.
+_DEFAULT_POST_REPLY = x_client.post_reply
 
 
 def _setup_logging() -> None:
@@ -282,19 +285,26 @@ def main() -> dict:
         if day_left < len(targets):
             like_summary["skipped"]["DAY_CAP"] = len(targets) - day_left
             targets = targets[:day_left]
-        for tweet in targets:
+        for target_index, tweet in enumerate(targets):
             if mode == "dry_run":
                 like_summary["liked"] += 1
                 continue
             record = {"reply_tweet_id": tweet["id"], "author_id": tweet.get("author_id", ""),
                       "mode": mode, "would_like": mode == "shadow"}
             if mode == "live":
+                if not guard.can_write():
+                    remaining = len(targets) - target_index
+                    like_summary["skipped"]["BUDGET_WRITE"] = remaining
+                    break
                 ok, error = x_client.post_like(client, tweet["id"])
+                guard.record_write()
+                store.upsert_budget(guard.row)
                 if not ok:
                     if x_client.is_spend_cap_error(error):
                         like_summary["spend_cap"] = True
                         break
-                    like_summary["skipped"]["LIKE_FAIL"] = like_summary["skipped"].get("LIKE_FAIL", 0) + 1
+                    skipped = like_summary["skipped"]
+                    skipped["LIKE_FAIL"] = skipped.get("LIKE_FAIL", 0) + 1
                     continue
                 record["liked_at"] = datetime.now(UTC).isoformat()
             if store.insert_like(record):
@@ -536,7 +546,12 @@ def main() -> dict:
             time.sleep(delay)
 
         # live: 발행 → 즉시 기록 (발행-기록 짝)
-        publish_result = x_client.post_reply(client, reply_text, tweet_id)
+        # 테스트/외부 사용처가 레거시 post_reply를 교체할 수 있어 해당 경우에는
+        # 기존 호출 규약을 유지하고, 실제 클라이언트 경로에서는 오류 원문도 받는다.
+        if x_client.post_reply is _DEFAULT_POST_REPLY:
+            publish_result = x_client.post_reply_with_error(client, reply_text, tweet_id)
+        else:
+            publish_result = x_client.post_reply(client, reply_text, tweet_id)
         if isinstance(publish_result, tuple):
             response_tweet_id, publish_error = publish_result
         else:
@@ -570,7 +585,8 @@ def main() -> dict:
     failures = {key: value for key, value in summary["skip_reasons"].items()
                 if key in {"PUBLISH_FAIL", "SPEND_CAP"} and value}
     if failures:
-        send_admin_alert("Reply Engine failure: " + ", ".join(f"{k}={v}" for k, v in failures.items()))
+        failure_counts = ", ".join(f"{key}={value}" for key, value in failures.items())
+        send_admin_alert(f"Reply Engine failure: {failure_counts}")
 
     # ── Step 8: 예산 저장 + 리포트 ────────────────────────────
     if db_write_allowed:

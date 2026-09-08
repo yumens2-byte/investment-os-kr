@@ -101,6 +101,7 @@ def test_like_live_executes_and_records(monkeypatch):
     assert len(liked) == result["likes"]["liked"] >= 1
     assert lcalls["inserted"][0]["liked_at"]              # 실행-기록 짝
     assert result["published"] == 1                        # 답글 파이프라인 무영향
+    assert mem.budget_saved[-1]["write_calls"] == len(liked) + 1
 
 
 def test_like_no_filter_expired_and_offscope_also_liked(monkeypatch):

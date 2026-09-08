@@ -198,11 +198,12 @@ def fetch_mentions(
             "oldest_id": oldest_id, "saturated": saturated, "error": None}
 
 
-def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> str | None:
-    """
-    답글 1건 발행. 재시도 없음 (승인 E — 타임아웃 후 재시도 시 이중 답글 리스크).
-    성공 시 tweet_id, 실패 시 None.
-    """
+def post_reply_with_error(
+    client: tweepy.Client,
+    text: str,
+    in_reply_to_tweet_id: str,
+) -> tuple[str | None, str | None]:
+    """답글을 발행하고 성공 ID 또는 진단 가능한 오류 원문을 반환한다."""
     try:
         resp = client.create_tweet(
             text=text,
@@ -211,10 +212,29 @@ def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> s
         )
         tweet_id = str(resp.data["id"])
         logger.info(f"[XClient] 답글 발행 완료: {tweet_id} → reply_to={in_reply_to_tweet_id}")
-        return tweet_id
+        return tweet_id, None
     except Exception as exc:
         logger.error(f"[XClient] 답글 발행 실패 (재시도 없음): {exc}")
-        return None
+        return None, str(exc)
+
+
+def post_reply(client: tweepy.Client, text: str, in_reply_to_tweet_id: str) -> str | None:
+    """
+    답글 1건 발행. 재시도 없음 (승인 E — 타임아웃 후 재시도 시 이중 답글 리스크).
+    성공 시 tweet_id, 실패 시 None.
+    """
+    tweet_id, _error = post_reply_with_error(client, text, in_reply_to_tweet_id)
+    return tweet_id
+
+
+def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:
+    """좋아요 1건을 수행하며 호출부의 오류 분류를 위해 원문을 돌려준다."""
+    try:
+        client.like(tweet_id, user_auth=True)
+        return True, None
+    except Exception as exc:
+        logger.error(f"[XClient] 좋아요 실패: {exc}")
+        return False, str(exc)
 
 
 def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:

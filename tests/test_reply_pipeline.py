@@ -80,6 +80,16 @@ def test_post_reply_no_retry():
     assert calls["n"] == 1  # 재시도 없음 (승인 E)
 
 
+def test_post_reply_with_error_preserves_platform_message():
+    class _Client:
+        def create_tweet(self, **_kwargs):
+            raise RuntimeError("403 monthly spend cap reached")
+
+    tweet_id, error = x_client.post_reply_with_error(_Client(), "감사합니다", "100")
+    assert tweet_id is None
+    assert error == "403 monthly spend cap reached"
+
+
 # ---------------------------------------------------------------------------
 # run_reply 파일럿 — 공용 목킹 헬퍼
 # ---------------------------------------------------------------------------
