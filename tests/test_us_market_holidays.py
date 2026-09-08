@@ -12,7 +12,7 @@ tests/test_us_market_holidays.py
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +24,7 @@ from config.us_market_holidays import (
     is_us_market_holiday,
     should_skip_market_session,
 )
+from run_market import _check_us_market_session, _target_us_session_date
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,33 @@ class TestShouldSkipMarketSession:
         with patch.dict(os.environ, {"FORCE_RUN": ""}):
             skip, _ = should_skip_market_session(date(2026, 5, 2))
             assert skip is True
+
+
+class TestMorningSessionResolution:
+    def test_monday_morning_uses_friday_close(self):
+        # 2026-09-06 23:30 UTC = 월요일 08:30 KST / 일요일 19:30 EDT
+        now = datetime(2026, 9, 6, 23, 30, tzinfo=UTC)
+        assert _target_us_session_date(now) == date(2026, 9, 4)
+
+        with patch.dict(os.environ, {"FORCE_RUN": ""}):
+            skip, reason = _check_us_market_session(False, now)
+        assert skip is False
+        assert reason == ""
+
+    def test_morning_after_monday_holiday_is_skipped(self):
+        # 2026-09-07 23:30 UTC = 화요일 08:30 KST / 월요일 19:30 EDT.
+        # Labor Day에는 신규 마감 데이터가 없으므로 금요일 데이터 재발행을 막는다.
+        now = datetime(2026, 9, 7, 23, 30, tzinfo=UTC)
+        assert _target_us_session_date(now) == date(2026, 9, 7)
+
+        with patch.dict(os.environ, {"FORCE_RUN": ""}):
+            skip, reason = _check_us_market_session(False, now)
+        assert skip is True
+        assert "Labor Day" in reason
+
+    def test_regular_weekday_uses_same_et_date(self):
+        now = datetime(2026, 9, 8, 23, 30, tzinfo=UTC)
+        assert _target_us_session_date(now) == date(2026, 9, 8)
 
 
 # ---------------------------------------------------------------------------

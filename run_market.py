@@ -1,5 +1,5 @@
 """
-KR Market OS — 메인 파이프라인 (v1.4.0)
+KR Market OS — 메인 파이프라인 (v1.4.1)
 ==========================================
 FRED + Yahoo Finance 수집 → 분석 → AI 톤 보정 → X/TG 발행 → Supabase 저장
 
@@ -7,6 +7,10 @@ FRED + Yahoo Finance 수집 → 분석 → AI 톤 보정 → X/TG 발행 → Sup
   - Track A: 미장 영업일 체크 (Step 0) — 미국 휴장 전날이면 발행 스킵
   - Track B: DRY_RUN 강화 — 게이트 우회 + JSON 리포트 (logs/dryrun_*.json)
   - Track C: Gemini AI 톤 (USE_AI_TONE=true) — 4키 chain, 실패 시 fallback
+
+[v1.4.1 변경 (2026-09-08)]
+  - 아침 세션을 ET 현재 날짜 기준으로 바로잡고 월요일은 금요일 마감으로 롤백
+  - 휴장일은 롤백하지 않고 스킵하여 정체 데이터 재발행 방지
 
 [보안 정책]
 - 필수 데이터 누락 시 X/TG 발행 전면 차단 (Supabase 저장은 유지)
@@ -27,6 +31,7 @@ import os
 import sys
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from collectors.kr_fred_client import collect_fred_data
 from collectors.kr_yahoo_client import collect_sector_data, collect_yahoo_data
@@ -38,7 +43,7 @@ from publishers.kr_formatter import format_daily_tweet
 from publishers.tg_publisher import publish_message
 from publishers.x_publisher import publish_thread
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 # ---------------------------------------------------------------------------
 # 발행 필수 데이터 게이트 — 1개라도 None이면 X/TG 실 발행 차단
@@ -52,9 +57,10 @@ _REQUIRED_FOR_PUBLISH: list[str] = [
     "dxy",      # 달러 인덱스
 ]
 
-# 한국 아침 발행 = 전날 ET 마감 데이터 사용 → 전날 ET 기준 휴장 체크
-# DST 정밀도는 날짜 단위 체크에 영향 없음 (EST -5h 고정)
-_ET_OFFSET_HOURS = -5
+# 한국 아침 발행(08:30 KST) 시각은 미 동부 18:30(전날)이므로,
+# ET의 '현재 날짜'가 이미 마감된 미장 세션이다. 주말은 최근 금요일로 롤백한다.
+# DST를 포함한 날짜 경계를 정확히 다루기 위해 IANA 타임존을 사용한다.
+_US_EASTERN = ZoneInfo("America/New_York")
 
 # ---------------------------------------------------------------------------
 # 로깅 설정 — stdout + 날짜별 파일 동시 출력
@@ -136,18 +142,32 @@ def _validate_required_data(market_data: dict) -> list[str]:
 # 미장 영업일 체크 (Track A)
 # ---------------------------------------------------------------------------
 
-def _check_us_market_session(dry_run: bool) -> tuple[bool, str]:
+def _target_us_session_date(now_utc: datetime | None = None) -> date:
+    """한국 아침 브리핑이 참조할 최근 미장 세션 날짜를 구한다.
+
+    월요일 아침(KST)은 미 동부 일요일 저녁이므로 직전 금요일 세션을
+    사용해야 한다. 휴장일은 자동 롤백하지 않고 게이트에서 스킵하여,
+    직전 발행과 같은 정체 데이터를 다시 발행하는 것을 막는다.
+    """
+    current = now_utc or datetime.now(UTC)
+    candidate = current.astimezone(_US_EASTERN).date()
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def _check_us_market_session(
+    dry_run: bool, now_utc: datetime | None = None
+) -> tuple[bool, str]:
     """
     미장 영업일 체크.
-    한국 아침 발행 = 전날 ET 마감 데이터 사용 → 전날 ET 기준 휴장 체크.
+    한국 아침 발행 = 직전에 마감된 ET 세션 데이터 사용.
 
     Returns:
         (should_skip, skip_reason)
     """
-    now_et = datetime.now(UTC) + timedelta(hours=_ET_OFFSET_HOURS)
-    prev_et_date = (now_et - timedelta(days=1)).date()
-
-    should_skip, reason = should_skip_market_session(check_date=prev_et_date)
+    session_date = _target_us_session_date(now_utc)
+    should_skip, reason = should_skip_market_session(check_date=session_date)
 
     if should_skip:
         if dry_run:
@@ -157,7 +177,7 @@ def _check_us_market_session(dry_run: bool) -> tuple[bool, str]:
         else:
             logger.info(f"[Step0] 미장 휴장({reason}) — 발행 스킵 (FORCE_RUN=true로 우회)")
     else:
-        logger.info(f"[Step0] 전날 ET({prev_et_date}) 영업일 확인 — 진행")
+        logger.info(f"[Step0] 최근 마감 ET({session_date}) 영업일 확인 — 진행")
 
     return should_skip, reason
 
