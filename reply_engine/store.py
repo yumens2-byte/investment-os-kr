@@ -15,6 +15,19 @@ Supabase 영속화 레이어.
   live    — 전부 O
 
 일 경계: KST (UTC+9 고정, DST 없음).
+
+v1.2.0 (2026-09-04, R-11): 중복 판정 기준을 '이력 존재' → '실제 발행됨'으로 변경.
+  DB 점검 결과 shadow 기간 49건 + PUBLISH_FAIL 2건이 발행 없이 이력에만 남아
+  L1 DUP 가드로 영구 차단됐다. response_tweet_id가 채워진 건만 중복으로 본다.
+  재시도 폭주를 막기 위해 실패 건은 REPLY_RETRY_WINDOW_HOURS 창 안에서만 재대상이 된다.
+  재처리 시 PK(reply_tweet_id) 충돌이 발생하므로 insert → upsert로 전환한다.
+
+v1.1.0 (2026-08-30, R-5): 배치 조회 3종 신설 (history_exists_bulk,
+  count_author_responded_today_bulk, count_conversation_responded_today_bulk).
+  기존 단건 함수는 하위호환·비상 경로로 유지한다.
+  사유: 후보 N건 × 3쿼리 순차 실행 구조가 MENTIONS_MAX_RESULTS 100 상향 시
+  최대 300쿼리로 선형 폭증. 배치 전환으로 3쿼리 고정.
+  실패 정책은 단건과 동일하게 보수적(확인 불가 = 발행 금지)으로 유지한다.
 """
 
 from __future__ import annotations
@@ -23,8 +36,9 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from db.supabase_client import get_client
+from reply_engine.config import REPLY_RETRY_WINDOW_HOURS
 
-VERSION = "1.0.1"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +46,7 @@ _T_HISTORY = "kr_reply_history"
 _T_CURSOR = "kr_reply_cursor"
 _T_BUDGET = "kr_reply_budget"
 _T_BLACKLIST = "kr_reply_blacklist"
+_T_LIKES = "kr_reply_likes"
 
 _KST_OFFSET = timedelta(hours=9)
 
@@ -58,18 +73,42 @@ def kst_day_start_utc_iso() -> str:
 # history — L1 멱등성 + 상한 카운트
 # ---------------------------------------------------------------------------
 
+def _retry_cutoff_iso() -> str:
+    """재시도 창의 하한 시각 (R-11). 이보다 오래된 미발행 이력은 재시도하지 않는다."""
+    return (datetime.now(UTC) - timedelta(hours=REPLY_RETRY_WINDOW_HOURS)).isoformat()
+
+
 def history_exists(reply_tweet_id: str) -> bool:
-    """L1 가드: 해당 댓글이 이미 처리 이력에 있는가."""
+    """
+    L1 가드: 이 댓글에 이미 답글이 나갔는가 (R-11).
+
+    '이력 존재'가 아니라 '실제 발행됨(response_tweet_id 존재)'을 중복 기준으로 본다.
+    미발행 이력(shadow 시뮬레이션, PUBLISH_FAIL)은 재시도 창 안에서는 중복이 아니며,
+    창을 넘기면 재시도를 종결하기 위해 중복으로 취급한다.
+    """
     try:
-        result = (
+        published = (
             get_client()
             .table(_T_HISTORY)
             .select("reply_tweet_id")
             .eq("reply_tweet_id", reply_tweet_id)
+            .not_.is_("response_tweet_id", "null")
             .limit(1)
             .execute()
         )
-        return bool(result.data)
+        if published.data:
+            return True
+
+        expired = (
+            get_client()
+            .table(_T_HISTORY)
+            .select("reply_tweet_id")
+            .eq("reply_tweet_id", reply_tweet_id)
+            .lt("created_at", _retry_cutoff_iso())
+            .limit(1)
+            .execute()
+        )
+        return bool(expired.data)
     except Exception as exc:
         logger.error(f"[Store] history_exists 조회 실패: {exc}")
         # 조회 실패 시 True 반환 — 확인 불가면 발행하지 않는 보수적 처리
@@ -77,9 +116,19 @@ def history_exists(reply_tweet_id: str) -> bool:
 
 
 def insert_history(record: dict) -> bool:
-    """이력 INSERT. PK 충돌 포함 실패 시 False."""
+    """
+    이력 기록. 실패 시 False.
+
+    R-11: 발행 실패·shadow 건이 재처리 대상이 되므로 같은 reply_tweet_id로
+    다시 들어올 수 있다. PK 충돌을 피하기 위해 upsert를 쓴다.
+    """
     try:
-        result = get_client().table(_T_HISTORY).insert(record).execute()
+        result = (
+            get_client()
+            .table(_T_HISTORY)
+            .upsert(record, on_conflict="reply_tweet_id")
+            .execute()
+        )
         return bool(result.data)
     except Exception as exc:
         logger.error(f"[Store] insert_history 실패 ({record.get('reply_tweet_id')}): {exc}")
@@ -107,13 +156,17 @@ def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
         return False
 
 
-def update_skip_reason(reply_tweet_id: str, skip_reason: str) -> bool:
+def update_skip_reason(
+    reply_tweet_id: str,
+    skip_reason: str,
+    error_message: str | None = None,
+) -> bool:
     """발행 단계 실패 사유 사후 기록 (PUBLISH_FAIL 등 — 감사추적용)."""
     try:
         result = (
             get_client()
             .table(_T_HISTORY)
-            .update({"skip_reason": skip_reason})
+            .update({"skip_reason": skip_reason, "error_message": error_message})
             .eq("reply_tweet_id", reply_tweet_id)
             .execute()
         )
@@ -156,6 +209,108 @@ def count_conversation_responded_today(conversation_id: str) -> int:
 def count_responded_today() -> int:
     """일일 답글 상한 체크용 총 발행 수."""
     return _count_today("", "", responded_only=True)
+
+
+# ---------------------------------------------------------------------------
+# 배치 조회 (R-5) — postgrest 2.31.0 `in_(column, values)` 검증 완료
+# ---------------------------------------------------------------------------
+
+# in_()는 값을 URL 쿼리스트링에 직렬화하므로 과도한 길이를 피해 분할 조회한다.
+_IN_CHUNK_SIZE = 50
+
+
+def _chunks(items: list[str], size: int = _IN_CHUNK_SIZE):
+    """리스트를 size 단위로 분할 (URL 길이 안전장치)."""
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def history_exists_bulk(reply_tweet_ids: list[str]) -> set[str]:
+    """
+    L1 배치 가드: 재응답하면 안 되는 reply_tweet_id 집합 (R-11).
+
+    중복 기준은 '이력 존재'가 아니라 다음 둘 중 하나다.
+      (a) 실제 발행됨 — response_tweet_id 존재
+      (b) 재시도 창 경과 — 미발행이지만 REPLY_RETRY_WINDOW_HOURS를 넘긴 이력
+
+    조회 실패 시 전건 '중복'으로 반환한다 — 확인 불가면 발행하지 않는 보수적 처리
+    (단건 history_exists와 동일 정책).
+    """
+    ids = [i for i in dict.fromkeys(reply_tweet_ids) if i]
+    if not ids:
+        return set()
+
+    cutoff = _retry_cutoff_iso()
+    found: set[str] = set()
+    try:
+        for chunk in _chunks(ids):
+            published = (
+                get_client()
+                .table(_T_HISTORY)
+                .select("reply_tweet_id")
+                .in_("reply_tweet_id", chunk)
+                .not_.is_("response_tweet_id", "null")
+                .execute()
+            )
+            expired = (
+                get_client()
+                .table(_T_HISTORY)
+                .select("reply_tweet_id")
+                .in_("reply_tweet_id", chunk)
+                .lt("created_at", cutoff)
+                .execute()
+            )
+            for result in (published, expired):
+                found |= {
+                    row["reply_tweet_id"]
+                    for row in (result.data or [])
+                    if row.get("reply_tweet_id")
+                }
+    except Exception as exc:
+        logger.error(f"[Store] history_exists_bulk 실패 → 전건 DUP 처리: {exc}")
+        return set(ids)
+    return found
+
+
+def _count_today_bulk(column: str, values: list[str]) -> dict[str, int]:
+    """
+    당일(KST) responded=True 이력을 컬럼값별로 집계.
+    조회 실패 시 전건 큰 값 반환 (보수적 차단 — _count_today와 동일 정책).
+    """
+    keys = [v for v in dict.fromkeys(values) if v]
+    if not keys:
+        return {}
+
+    counts: dict[str, int] = {}
+    try:
+        for chunk in _chunks(keys):
+            result = (
+                get_client()
+                .table(_T_HISTORY)
+                .select(column)
+                .gte("created_at", kst_day_start_utc_iso())
+                .eq("responded", True)
+                .in_(column, chunk)
+                .execute()
+            )
+            for row in (result.data or []):
+                key = row.get(column)
+                if key:
+                    counts[key] = counts.get(key, 0) + 1
+    except Exception as exc:
+        logger.error(f"[Store] _count_today_bulk 실패 ({column}) → 보수 차단: {exc}")
+        return {k: 10**9 for k in keys}
+    return counts
+
+
+def count_author_responded_today_bulk(author_ids: list[str]) -> dict[str, int]:
+    """L4 배치: 저자별 당일 발행 수."""
+    return _count_today_bulk("author_id", author_ids)
+
+
+def count_conversation_responded_today_bulk(conversation_ids: list[str]) -> dict[str, int]:
+    """L5 배치: 대화별 당일 발행 수."""
+    return _count_today_bulk("conversation_id", conversation_ids)
 
 
 def get_recent_response_texts(limit: int = 30) -> list[str]:
@@ -269,3 +424,42 @@ def get_blacklist_ids() -> set[str]:
     except Exception as exc:
         logger.error(f"[Store] blacklist 조회 실패: {exc}")
         return set()
+
+
+def get_existing_like_ids(tweet_ids: list[str]) -> set[str]:
+    """이미 처리한 좋아요 ID를 일괄 조회한다. 실패하면 전건 제외한다."""
+    ids = [str(value) for value in dict.fromkeys(tweet_ids) if value]
+    if not ids:
+        return set()
+    try:
+        rows = (
+            get_client()
+            .table(_T_LIKES)
+            .select("reply_tweet_id")
+            .in_("reply_tweet_id", ids)
+            .execute()
+        )
+        return {str(row["reply_tweet_id"]) for row in (rows.data or [])}
+    except Exception as exc:
+        logger.error(f"[Store] like 이력 조회 실패: {exc}")
+        return set(ids)
+
+
+def count_likes_today() -> int:
+    """KST 기준 당일 기록된 실/시뮬레이션 좋아요 수."""
+    try:
+        result = (get_client().table(_T_LIKES).select("reply_tweet_id", count="exact")
+                  .gte("created_at", kst_day_start_utc_iso()).execute())
+        return int(result.count or 0)
+    except Exception as exc:
+        logger.error(f"[Store] 당일 like 카운트 실패: {exc}")
+        return 10**9
+
+
+def insert_like(record: dict) -> bool:
+    """좋아요 처리 이력을 기록한다."""
+    try:
+        return bool(get_client().table(_T_LIKES).insert(record).execute().data)
+    except Exception as exc:
+        logger.error(f"[Store] like 기록 실패: {exc}")
+        return False

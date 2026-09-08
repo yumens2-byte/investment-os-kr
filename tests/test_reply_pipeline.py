@@ -53,6 +53,7 @@ def test_fetch_mentions_parses_response():
         "conversation_id": "300",
         "in_reply_to_user_id": "111",
         "created_at": tweet.created_at,
+        "parent_text": "",     # R-12: referenced_tweets 없음 → 빈 문자열
     }
     assert result["users"]["222"]["followers"] == 42
 
@@ -79,6 +80,16 @@ def test_post_reply_no_retry():
     assert calls["n"] == 1  # 재시도 없음 (승인 E)
 
 
+def test_post_reply_with_error_preserves_platform_message():
+    class _Client:
+        def create_tweet(self, **_kwargs):
+            raise RuntimeError("403 monthly spend cap reached")
+
+    tweet_id, error = x_client.post_reply_with_error(_Client(), "감사합니다", "100")
+    assert tweet_id is None
+    assert error == "403 monthly spend cap reached"
+
+
 # ---------------------------------------------------------------------------
 # run_reply 파일럿 — 공용 목킹 헬퍼
 # ---------------------------------------------------------------------------
@@ -102,6 +113,13 @@ class _MemStore:
             monkeypatch.setattr(mod, "history_exists", lambda tid: tid in self.history)
             monkeypatch.setattr(mod, "count_author_responded_today", lambda _a: 0)
             monkeypatch.setattr(mod, "count_conversation_responded_today", lambda _c: 0)
+            # R-5 (2026-08-30): 배치 조회 3종 — 미패치 시 실 Supabase 호출 발생
+            monkeypatch.setattr(
+                mod, "history_exists_bulk",
+                lambda ids: {i for i in ids if i in self.history},
+            )
+            monkeypatch.setattr(mod, "count_author_responded_today_bulk", lambda _ids: {})
+            monkeypatch.setattr(mod, "count_conversation_responded_today_bulk", lambda _ids: {})
         monkeypatch.setattr(store, "insert_history", self._insert)
         monkeypatch.setattr(store, "mark_responded", self._mark)
         monkeypatch.setattr(store, "count_responded_today", lambda: self.responded_count)

@@ -101,6 +101,7 @@ def test_like_live_executes_and_records(monkeypatch):
     assert len(liked) == result["likes"]["liked"] >= 1
     assert lcalls["inserted"][0]["liked_at"]              # 실행-기록 짝
     assert result["published"] == 1                        # 답글 파이프라인 무영향
+    assert mem.budget_saved[-1]["write_calls"] == len(liked) + 1
 
 
 def test_like_no_filter_expired_and_offscope_also_liked(monkeypatch):
@@ -242,7 +243,7 @@ def test_like_insert_fail_not_counted(monkeypatch):
 
 
 def test_like_versions():
-    assert run_reply.VERSION == "1.4.0"
-    assert config.VERSION == "1.0.7"
+    assert run_reply.VERSION == "1.5.0"
+    assert config.VERSION == "1.4.0"
     assert store.VERSION == "1.2.0"
     assert x_client.VERSION == "1.4.0"
