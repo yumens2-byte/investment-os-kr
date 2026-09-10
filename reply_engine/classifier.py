@@ -45,6 +45,13 @@ _NEGATIVE_MARKERS: tuple[str, ...] = (
     "틀렸", "별로", "사기", "거짓", "엉터리", "쓰레기", "허접", "실망",
 )
 
+# 짧은 맞장구는 의미가 명확한데도 LLM 장애 시 AMBIGUOUS로 떨어져 발행 기회를
+# 잃기 쉬운 운영 표본이다. 투자 판단을 포함하지 않는 표현만 좁게 허용한다.
+_SUPPORTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^(?:ㅋ{2,}|ㅎ{2,}|[ㅋㅎ]+[!~. ]*)$"),
+    re.compile(r"^(?:ㅇㅈ|인정|맞아요|맞습니다|그쵸|그렇죠|그러게요)[!~. ]*$"),
+)
+
 # R-4: 의문 어미/의문사 — 이것만으로 QUESTION 확정 (문말 한정 없이 탐색)
 # 주의: 어간 활용형을 포괄하려면 '인가요'가 아니라 '가요'로 잡아야 한다.
 # ('유익한가요'는 인가요/건가요 어느 쪽에도 매칭되지 않는다 — 초기 설계 오류)
@@ -69,7 +76,8 @@ def classify_by_rule(text: str) -> str | None:
       2) 부정 마커               → NEGATIVE
       3) '?' 있고 긍정 마커 없음 → QUESTION (보수 유지)
       4) 긍정 마커               → POSITIVE
-      5) 그 외                   → None (AI 위임)
+      5) 명백한 짧은 맞장구      → SUPPORTIVE_NEUTRAL
+      6) 그 외                   → None (AI 위임)
     """
     body = re.sub(r"@\w+", "", text or "").strip()
 
@@ -87,6 +95,9 @@ def classify_by_rule(text: str) -> str | None:
 
     if has_positive:
         return "POSITIVE"
+
+    if any(pattern.fullmatch(body) for pattern in _SUPPORTIVE_PATTERNS):
+        return "SUPPORTIVE_NEUTRAL"
     return None
 
 

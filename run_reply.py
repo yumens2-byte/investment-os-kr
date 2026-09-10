@@ -103,6 +103,19 @@ def _write_report(summary: dict, guard=None) -> None:
     """실행 요약 JSON 리포트 (artifact 업로드 대상) — 실패해도 파이프라인 무영향.
     guard 전달 시 예산 스냅샷 포함 (B-3).
     """
+    collected = int(summary.get("collected") or 0)
+    candidates = int(summary.get("candidates") or 0)
+    classified_pass = int(summary.get("classified_pass") or 0)
+    published = int(summary.get("published") or 0)
+    summary["funnel"] = {
+        "candidate_rate": round(candidates / collected, 4) if collected else 0.0,
+        "classification_pass_rate": (
+            round(classified_pass / candidates, 4) if candidates else 0.0
+        ),
+        "publish_rate_of_collected": round(published / collected, 4) if collected else 0.0,
+        "publish_rate_of_pass": round(published / classified_pass, 4) if classified_pass else 0.0,
+    }
+    summary["finished_at"] = datetime.now(UTC).isoformat()
     if guard is not None:
         summary["budget"] = guard.snapshot()
     try:
@@ -148,6 +161,7 @@ def main() -> dict:
         "collection_saturated": False,   # R-3: 수집 상한 포화 (미수집분 존재 가능)
         "oldest_id": None,               # R-3: 유실 구간 사후 추적용
         "candidates": 0,
+        "classified_pass": 0,
         "non_kr_replies": 0,      # R-9: 정형 문구로 처리된 외국어 건수
         "foreign_thread_replies": 0,   # B안: 타인 스레드 응답 건수
         "cursor_stale_hours": None,    # R-10: 커서 정체 시간 (0건 원인 구분용)
@@ -417,6 +431,7 @@ def main() -> dict:
                 })
 
     logger.info(f"[Step4] 분류 통과 {len(pass_items)}건")
+    summary["classified_pass"] = len(pass_items)
 
     # ── Step 5: 생성 ──────────────────────────────────────────
     replies: dict[str, str] = {}
@@ -457,6 +472,7 @@ def main() -> dict:
         author_id = tweet["author_id"]
         conversation_id = tweet["conversation_id"]
         reply_text = (replies.get(tweet_id) or "").strip()
+        response_source = "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
 
         # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
         skip_reason: str | None = None
@@ -470,19 +486,22 @@ def main() -> dict:
             gate_ok, gate_reason = gate.check_reply(
                 reply_text, recent_texts, comment_text=tweet["text"]
             )
-            # F-2 (2026-08-20): 배치 내 동일 문구 연쇄 생성으로 인한 유사도 탈락 시,
-            # 결정적 seed 풀 문구로 1회 한정 교체 후 게이트 전체 재검사 (커버리지 회복)
+            # 배치 내 동일 문구 연쇄 생성으로 유사도 탈락 시, 결정적 순서의 안전 풀을
+            # 순회하며 게이트 전체를 재검사한다. 전부 탈락할 때만 무응답 처리한다.
             if not gate_ok and gate_reason == "GATE_SIMILARITY":
-                fallback_text = generator.pick_fallback(tweet["label"], tweet_id)
-                fb_ok, _fb_reason = gate.check_reply(
-                    fallback_text, recent_texts, comment_text=tweet["text"]
-                )
-                if fb_ok:
+                for fallback_text in generator.fallback_candidates(tweet["label"], tweet_id):
+                    fb_ok, _fb_reason = gate.check_reply(
+                        fallback_text, recent_texts, comment_text=tweet["text"]
+                    )
+                    if not fb_ok:
+                        continue
                     logger.info(
                         f"[Gate] 유사도 탈락 → 풀 fallback 대체: '{reply_text}' → '{fallback_text}'"
                     )
                     reply_text = fallback_text
+                    response_source = "TEMPLATE_FALLBACK"
                     gate_ok, gate_reason = True, None
+                    break
             if not gate_ok:
                 skip_reason = gate_reason
             elif mode == "live" and not guard.can_write():
@@ -509,7 +528,7 @@ def main() -> dict:
             "comment_preview": tweet["text"][:100],
             "label": tweet["label"],
             "reply_text": reply_text,
-            "source": "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI",
+            "source": response_source,
             "foreign_thread": bool(tweet.get("foreign_thread")),
             "result": None,
         }
