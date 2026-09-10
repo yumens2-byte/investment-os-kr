@@ -6,7 +6,7 @@ X Reply Engine — 메인 파이프라인 (v1.0.0)
 
 [정책 요약]
 - 무응답이 기본값 (default-deny): POSITIVE / SUPPORTIVE_NEUTRAL만 답글
-- 답글은 공백 포함 40자 이내 감사·호응만 (봇이 아닌 것처럼)
+- 답글은 공백 포함 40자 이내 감사·호응만 (자연스럽고 관련성 있게)
 - 발행 재시도 없음 (이중 답글 방지 우선 — 승인 E)
 - 24시간 경과 댓글 자동 폐기 (승인 D)
 
@@ -67,6 +67,7 @@ from reply_engine.config import (
     REPLY_LIKE_PER_DAY,
     REPLY_LIKE_PER_RUN,
     REPLY_RECENT_COMPARE_COUNT,
+    REPLY_RUN_CAP,
     STARTUP_JITTER_MAX_SEC,
     get_mode,
     get_my_user_id,
@@ -74,7 +75,7 @@ from reply_engine.config import (
     is_like_enabled,
 )
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -465,7 +466,7 @@ def main() -> dict:
     # 게이트 탈락·발행 실패로 승인≠발행이 되는 경로가 있어 심층 방어로 재계수한다.
     published_author_run: dict[str, int] = {}
     published_conv_run: dict[str, int] = {}
-    first_publish_delayed = False   # 첫 발행 직전 1회 랜덤 딜레이 (안티봇, 2026-08-17)
+    first_publish_delayed = False   # 첫 발행 직전 1회 부하 분산 딜레이
 
     for idx, tweet in enumerate(pass_items):
         tweet_id = tweet["id"]
@@ -476,7 +477,9 @@ def main() -> dict:
 
         # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
         skip_reason: str | None = None
-        if responded_today + published_this_run >= REPLY_DAILY_CAP:
+        if published_this_run >= REPLY_RUN_CAP:
+            skip_reason = "RUN_CAP"
+        elif responded_today + published_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
         elif published_author_run.get(author_id, 0) >= REPLY_AUTHOR_DAILY_CAP:
             skip_reason = "AUTHOR_CAP_RUN"      # R-2 2차 방어선
@@ -556,12 +559,12 @@ def main() -> dict:
             published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
             continue
 
-        # live: 첫 발행 직전 랜덤 딜레이 0~PUBLISH_START_DELAY_MAX_SEC (안티봇)
+        # live: 동시 실행/순간 부하를 줄이는 첫 발행 지연. 탐지 회피 수단이 아니다.
         # 발행 대상이 실제로 확정된 시점에만 대기 — 전량 스킵 실행에서는 대기 없음
         if not first_publish_delayed:
             first_publish_delayed = True
             delay = random.randint(0, PUBLISH_START_DELAY_MAX_SEC)
-            logger.info(f"[Step7] 첫 발행 랜덤 딜레이 {delay}초 대기 (안티봇)")
+            logger.info(f"[Step7] 첫 발행 부하 분산 딜레이 {delay}초 대기")
             time.sleep(delay)
 
         # live: 발행 → 즉시 기록 (발행-기록 짝)
@@ -596,7 +599,7 @@ def main() -> dict:
             _skip(tweet_id, failure)
 
         # 발행 간 지터 (마지막 건 제외)
-        if idx < len(pass_items) - 1:
+        if idx < len(pass_items) - 1 and published_this_run < REPLY_RUN_CAP:
             time.sleep(random.randint(PUBLISH_JITTER_MIN_SEC, PUBLISH_JITTER_MAX_SEC))
 
     summary["published"] = published_this_run

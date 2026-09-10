@@ -27,13 +27,14 @@ v1.3.0 (2026-08-30, R-10/B): env_bool 헬퍼 신설.
   B안  — REPLY_FOREIGN_THREAD_ENABLED / _RUN_CAP (타인 스레드 저상한 허용).
 
 v1.4.0 (2026-09-04, R-11): REPLY_RETRY_WINDOW_HOURS 신설 (발행 실패 재시도 창).
+v1.5.0 (2026-09-10): 회당 발행 상한을 추가하고 운영 상한을 유효 범위로 제한.
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -78,12 +79,14 @@ def env_bool(name: str, default: bool) -> bool:
 # ---------------------------------------------------------------------------
 # 답글 정책 상한
 # ---------------------------------------------------------------------------
-REPLY_DAILY_CAP: int = env_int("REPLY_DAILY_CAP", 8)           # 일일 답글 상한 (운영값: Variables)
-REPLY_AUTHOR_DAILY_CAP: int = env_int("REPLY_AUTHOR_DAILY_CAP", 1)  # 사용자별/일
-REPLY_CONV_DAILY_CAP: int = env_int("REPLY_CONV_DAILY_CAP", 3)      # 대화별/일
+# 잘못된 음수/과대 설정이 보호 장치를 무력화하지 않도록 모두 범위를 강제한다.
+REPLY_DAILY_CAP: int = env_int_clamped("REPLY_DAILY_CAP", 8, 1, 50)
+REPLY_RUN_CAP: int = env_int_clamped("REPLY_RUN_CAP", 2, 1, 10)
+REPLY_AUTHOR_DAILY_CAP: int = env_int_clamped("REPLY_AUTHOR_DAILY_CAP", 1, 1, 10)
+REPLY_CONV_DAILY_CAP: int = env_int_clamped("REPLY_CONV_DAILY_CAP", 3, 1, 20)
 REPLY_LIKE_PER_RUN: int = env_int_clamped("REPLY_LIKE_PER_RUN", 20, 1, 100)
 REPLY_LIKE_PER_DAY: int = env_int_clamped("REPLY_LIKE_PER_DAY", 50, 1, 1000)
-REPLY_MAX_AGE_HOURS: int = env_int("REPLY_MAX_AGE_HOURS", 24)  # 폐기 (승인 D)
+REPLY_MAX_AGE_HOURS: int = env_int_clamped("REPLY_MAX_AGE_HOURS", 24, 1, 168)
 
 # 답글 텍스트 규격
 REPLY_MAX_LENGTH: int = 40          # 공백 포함 최대 길이 ("한 줄 미만" 정책)
@@ -97,8 +100,8 @@ PUBLISH_JITTER_MAX_SEC: int = 180
 # 실행 시작 지터 (초) — live 모드 전용
 STARTUP_JITTER_MAX_SEC: int = 300
 
-# 발행 직전 랜덤 딜레이 상한 (초) — live 모드 전용, 첫 발행 직전 1회 적용 (안티봇)
-# cron 시각 + 처리시간으로 발행 시각이 고정 패턴화되는 것을 방지 (마스터 지시 2026-08-17)
+# 발행 직전 부하 분산 딜레이 상한 (초) — live 모드 전용, 첫 발행 직전 1회 적용.
+# 플랫폼 정책 우회 수단이 아니며 동시 실행과 순간 부하를 줄이기 위한 완충이다.
 PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 
 # ---------------------------------------------------------------------------

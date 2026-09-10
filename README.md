@@ -1,4 +1,7 @@
-# investment-os-kr — X Reply Engine v1.1.2 + Following Agent v1.0.0
+# investment-os-kr — X Reply Engine v1.6.0 + Following Agent v1.0.0
+
+> X 답글 파이프라인의 최신 구조, 위험 분석, 권장 변수, 단계별 배포 및 롤백 절차는
+> **[Reply Engine 운영·설계 가이드](docs/REPLY_ENGINE.md)**를 기준으로 합니다.
 
 **전환일**: 2026-08-17 | **역할 1 (INBOUND_REPLY)**: 내 게시글 댓글 자동 호응 답글 (`run_reply.py`, reply_engine/)
 **역할 2 (FOLLOWING_ENGAGEMENT, 2026-08-20)**: 팔로잉 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 (`run_following.py`, following_engine/) — 초기 배포 `FOLLOWING_ENABLED=false` + dry_run, LIVE 허용 액션은 QUOTE만 (자동 Reply 금지)
@@ -21,7 +24,7 @@
 
 **전수 테스트 표준 명령** (지침 11):
 ```bash
-ruff check . --line-length=100   # 신규 코드(reply_engine/, run_reply.py, tests/test_reply_*) 0건 유지
+ruff check reply_engine run_reply.py tests/test_reply*.py  # Reply Engine 변경 범위 0건 유지
 pytest -q tests/                 # 전수 PASS 필수
 ```
 
