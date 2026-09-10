@@ -51,7 +51,7 @@ def check_static(tweet: dict, my_user_id: str, blacklist: set[str]) -> tuple[boo
 
 def check_db(tweet: dict, mode: str) -> tuple[bool, str | None]:
     """DB 가드 — 정적 통과 건만 호출 (조회 최소화)."""
-    if store.action_exists(tweet["id"]):
+    if store.action_exists_for_mode(tweet["id"], mode):
         return False, "DUP"
     if store.author_in_cooldown(tweet["author_id"], AUTHOR_COOLDOWN_HOURS, mode):
         return False, "AUTHOR_COOLDOWN"

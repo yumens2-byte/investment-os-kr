@@ -11,6 +11,7 @@ skip 코드: SKIP_NOT_RELEVANT / SKIP_SCORE / SKIP_TEXT_INVALID / SKIP_SIMILAR
 from __future__ import annotations
 
 import logging
+import re
 
 from following_engine.config import (
     DUP_SIMILARITY_THRESHOLD,
@@ -27,18 +28,32 @@ VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
+_FORMAT_PATTERN = re.compile(r"#|https?://|t\.co/|@\w+", re.IGNORECASE)
+_IMPERATIVE_PATTERN = re.compile(
+    r"(해\s?보세요|해\s?주세요|하세요|하십시오|바랍니다|해야\s?합니다|놓치지\s?마세요)"
+)
+_NUMBER_PATTERN = re.compile(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?")
 
-def _validate_quote_text(text: str) -> bool:
+
+def _validate_quote_text(text: str, source_text: str = "") -> bool:
     if not text or len(text) > QUOTE_MAX_LENGTH:
         return False
-    if "#" in text or "http" in text.lower():
+    if _FORMAT_PATTERN.search(text) or _IMPERATIVE_PATTERN.search(text):
         return False
     if text.rstrip().endswith(("?", "？")):
         return False
-    return all(word not in text for word in BANNED_WORDS)
+    if not all(word not in text for word in BANNED_WORDS):
+        return False
+    # LLM이 원문에 없는 수치로 사실을 만들어내는 경로를 결정적으로 차단한다.
+    source_numbers = set(_NUMBER_PATTERN.findall(source_text or ""))
+    return set(_NUMBER_PATTERN.findall(text)).issubset(source_numbers)
 
 
-def decide(analysis: dict, recent_texts: list[str]) -> tuple[str, str | None]:
+def decide(
+    analysis: dict,
+    recent_texts: list[str],
+    source_text: str = "",
+) -> tuple[str, str | None]:
     """
     (action_type, skip_reason) 반환. action_type: QUOTE / REVIEW_ONLY / SKIP.
     판단 순서(문서 13장): relevant → 점수 → 텍스트 검증 → 유사도 → 매핑.
@@ -65,7 +80,7 @@ def decide(analysis: dict, recent_texts: list[str]) -> tuple[str, str | None]:
 
     if recommended == "QUOTE":
         text = analysis.get("generated_text", "")
-        if not _validate_quote_text(text):
+        if not _validate_quote_text(text, source_text):
             return "SKIP", "SKIP_TEXT_INVALID"
         for prev in recent_texts:
             if jaccard_similarity(text, prev) >= DUP_SIMILARITY_THRESHOLD:
