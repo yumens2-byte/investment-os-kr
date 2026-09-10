@@ -127,3 +127,20 @@ def test_budget_count_mode_fallback(monkeypatch):
     assert guard.can_write() is True
     guard.record_write()
     assert guard.can_write() is False   # 5 도달
+
+
+def test_budget_snapshot_separates_daily_total_from_run_delta(monkeypatch):
+    monkeypatch.setenv("X_READ_COST_KRW", "50")
+    monkeypatch.setenv("X_WRITE_COST_KRW", "40")
+    guard = BudgetGuard(_row(read=4, write=1, gemini=2, cost=240.0))
+    guard.record_read()
+    guard.record_gemini()
+
+    snapshot = guard.snapshot()
+    assert snapshot["write_calls"] == 1  # 공유 일일 누계
+    assert snapshot["run_delta"] == {
+        "read_calls": 1,
+        "write_calls": 0,
+        "gemini_calls": 1,
+        "est_cost_krw": 50.0,
+    }

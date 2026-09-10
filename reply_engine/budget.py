@@ -34,6 +34,7 @@ class BudgetGuard:
 
     def __init__(self, budget_row: dict):
         self.row = dict(budget_row)
+        self._initial_row = dict(budget_row)
         self.read_cost, self.write_cost = get_cost_per_call()
         self.limit_krw = get_daily_budget_krw()
         self.cost_mode = self.read_cost is not None and self.write_cost is not None
@@ -58,6 +59,16 @@ class BudgetGuard:
 
     def snapshot(self) -> dict:
         """리포트 JSON용 예산 스냅샷 (B-3)."""
+        run_delta = {
+            "read_calls": int(self.row["read_calls"]) - int(self._initial_row["read_calls"]),
+            "write_calls": int(self.row["write_calls"]) - int(self._initial_row["write_calls"]),
+            "gemini_calls": (
+                int(self.row["gemini_calls"]) - int(self._initial_row["gemini_calls"])
+            ),
+            "est_cost_krw": round(
+                float(self.row["est_cost_krw"]) - float(self._initial_row["est_cost_krw"]), 4
+            ),
+        }
         return {
             "mode": "cost" if self.cost_mode else "count",
             "read_calls": int(self.row["read_calls"]),
@@ -68,6 +79,9 @@ class BudgetGuard:
             "read_cost_krw": self.read_cost,
             "write_cost_krw": self.write_cost,
             "config_warnings": self.config_warnings,
+            # 상위 값은 reply/following이 공유하는 당일 누계다. dry_run에서 기존 write_calls가
+            # 보이는 혼동을 막기 위해 이번 실행 증분을 별도로 명시한다.
+            "run_delta": run_delta,
         }
 
     # ── 판정 ──

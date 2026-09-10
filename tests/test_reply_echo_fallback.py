@@ -109,8 +109,8 @@ def test_f2_pipeline_recovers_coverage(monkeypatch):
     assert result["review"][1]["reply_text"] == published[1][1]
 
 
-def test_f2_fallback_failure_still_skips(monkeypatch):
-    """fallback 문구조차 유사하면 기존대로 GATE_SIMILARITY 스킵 (재시도는 1회뿐)."""
+def test_f2_fallback_rotates_past_recent_duplicate(monkeypatch):
+    """첫 fallback이 겹치면 안전 풀의 다음 문구로 교체해 발행 기회를 보존한다."""
     _base_env(monkeypatch, "live")
     _quiet(monkeypatch)
     mem = _MemStore()
@@ -146,8 +146,9 @@ def test_f2_fallback_failure_still_skips(monkeypatch):
     )
 
     result = run_reply.main()
-    assert result["published"] == 1
-    assert result["skip_reasons"]["GATE_SIMILARITY"] == 1
+    assert result["published"] == 2
+    assert "GATE_SIMILARITY" not in result["skip_reasons"]
+    assert published[1][1] != pool_text
 
 
 def test_versions_bumped_f_series():
