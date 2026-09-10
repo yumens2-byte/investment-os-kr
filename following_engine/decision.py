@@ -33,12 +33,26 @@ _IMPERATIVE_PATTERN = re.compile(
     r"(해\s?보세요|해\s?주세요|하세요|하십시오|바랍니다|해야\s?합니다|놓치지\s?마세요)"
 )
 _NUMBER_PATTERN = re.compile(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?")
+_ASSERTIVE_PATTERN = re.compile(
+    r"(것으로\s?분석됩니다|영향으로\s?분석됩니다|전망됩니다|의미합니다|확실합니다|분명합니다)"
+)
+
+
+def _source_copy_ratio(text: str, source_text: str) -> float:
+    """생성문 bigram 중 원문에 그대로 존재하는 비율. 요약·복사를 보수적으로 탐지한다."""
+    generated = {text[i:i + 2] for i in range(max(0, len(text) - 1)) if not text[i:i + 2].isspace()}
+    source = {source_text[i:i + 2] for i in range(max(0, len(source_text) - 1))}
+    return len(generated & source) / len(generated) if generated else 0.0
 
 
 def _validate_quote_text(text: str, source_text: str = "") -> bool:
     if not text or len(text) > QUOTE_MAX_LENGTH:
         return False
-    if _FORMAT_PATTERN.search(text) or _IMPERATIVE_PATTERN.search(text):
+    if (
+        _FORMAT_PATTERN.search(text)
+        or _IMPERATIVE_PATTERN.search(text)
+        or _ASSERTIVE_PATTERN.search(text)
+    ):
         return False
     if text.rstrip().endswith(("?", "？")):
         return False
@@ -46,7 +60,9 @@ def _validate_quote_text(text: str, source_text: str = "") -> bool:
         return False
     # LLM이 원문에 없는 수치로 사실을 만들어내는 경로를 결정적으로 차단한다.
     source_numbers = set(_NUMBER_PATTERN.findall(source_text or ""))
-    return set(_NUMBER_PATTERN.findall(text)).issubset(source_numbers)
+    if not set(_NUMBER_PATTERN.findall(text)).issubset(source_numbers):
+        return False
+    return _source_copy_ratio(text, source_text) < 0.65
 
 
 def decide(

@@ -29,7 +29,13 @@ from pathlib import Path
 
 from core.alert import send_admin_alert
 from following_engine import analyzer, collector, decision, executor, prefilter, store
-from following_engine.config import MAX_ACTIONS_PER_DAY, MAX_ACTIONS_PER_RUN, get_mode, is_enabled
+from following_engine.config import (
+    MAX_ACTIONS_PER_DAY,
+    MAX_ACTIONS_PER_RUN,
+    get_mode,
+    get_trusted_author_ids,
+    is_enabled,
+)
 from reply_engine import budget as budget_mod
 from reply_engine import x_client
 from reply_engine.config import (
@@ -245,6 +251,15 @@ def main() -> dict:
 
         action_type, skip_reason = decision.decide(analysis, recent_texts, tweet["text"])
 
+        # dry_run/shadow의 would_execute는 실제 LIVE 가능성을 뜻해야 한다. 신뢰 작성자
+        # allowlist 밖의 QUOTE는 검토 자료는 보존하되 자동 발행 후보로 계산하지 않는다.
+        if (
+            action_type == "QUOTE"
+            and mode != "live"
+            and tweet["author_id"] not in get_trusted_author_ids()
+        ):
+            action_type, skip_reason = "REVIEW_ONLY", "UNTRUSTED_AUTHOR_REVIEW"
+
         candidate = {
             "post_id": post_id,
             "author_id": tweet["author_id"],
@@ -264,6 +279,7 @@ def main() -> dict:
                 f"/E{analysis['engagement_value']}"
             ),
             "generated_text": candidate.get("generated_text", ""),
+            "decision_reason": skip_reason,
             "result": None,
         }
         summary["review"].append(entry)

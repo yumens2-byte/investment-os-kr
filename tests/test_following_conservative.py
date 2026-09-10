@@ -38,6 +38,12 @@ def test_quote_rejects_new_numbers_mentions_and_imperatives():
     assert decision._validate_quote_text("성장률 20%가 눈에 띄네요", "성장률 10% 발표") is False
     assert decision._validate_quote_text("성장률 10%가 눈에 띄네요", "성장률 10% 발표") is True
     assert decision._validate_quote_text("@someone 확인해 보세요", "공개 자료") is False
+    assert decision._validate_quote_text(
+        "이는 경기 둔화 영향으로 분석됩니다", "경기 둔화 관련 보도"
+    ) is False
+    assert decision._validate_quote_text(
+        "미국 10년물 금리가 확대됐습니다", "미국 10년물 금리가 확대됐습니다"
+    ) is False
 
 
 def test_analyzer_marks_posts_as_untrusted_and_flattens_newlines(monkeypatch):

@@ -323,6 +323,19 @@ def test_pilot_dry_run_zero_writes_zero_db(monkeypatch):
     assert mem.cursor_saved == []      # 커서 미전진
 
 
+def test_pilot_dry_run_untrusted_author_is_review_only(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "dry_run")
+    monkeypatch.setenv("FOLLOWING_TRUSTED_AUTHOR_IDS", "999")  # 게시물 작성자는 555
+
+    result = run_following.main()
+
+    assert result["would_execute"] == 0
+    assert result["review"][0]["action_type"] == "REVIEW_ONLY"
+    assert result["review"][0]["decision_reason"] == "UNTRUSTED_AUTHOR_REVIEW"
+    assert result["review"][0]["result"] == "DRY_RUN_COMPLETED"
+
+
 def test_pilot_shadow_zero_writes_with_db(monkeypatch):
     mem = _FMem()
     mem.install(monkeypatch, "shadow")
