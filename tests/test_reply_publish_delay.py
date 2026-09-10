@@ -1,4 +1,4 @@
-"""reply_engine — 발행 랜덤 딜레이(안티봇) + V-1 예산 즉시 저장 검증 (2026-08-17).
+"""reply_engine — 발행 부하 분산 딜레이 + V-1 예산 즉시 저장 검증 (2026-08-17).
 
   D-1: live 첫 발행 직전 1회 랜덤 딜레이 0~600초 (env REPLY_PUBLISH_DELAY_MAX_SEC)
        - 발행 확정 건이 있을 때만 대기 (전량 스킵 실행은 대기 없음)
@@ -81,19 +81,21 @@ def test_d1_no_delay_when_nothing_publishable(monkeypatch):
     assert [c for c in calls if c == (0, 600)] == []
 
 
-def test_v1_budget_saved_per_write(monkeypatch):
-    """live 2건 발행 시 예산 저장 = 발행마다 2회 + 종료 1회 = 3회."""
+def test_v1_budget_saved_per_write_and_run_cap(monkeypatch):
+    """live 후보가 3건이어도 기본 회당 상한 2건만 발행하고 예산을 즉시 저장한다."""
     _base_env(monkeypatch, "live")
     _quiet(monkeypatch)
     mem = _MemStore()
     mem.install(monkeypatch)
     published: list = []
     now = datetime.now(UTC)
-    two_pass = [
+    three_pass = [
         {"id": "400", "text": "@edt 감사합니다!", "author_id": "222",
          "conversation_id": "c1", "in_reply_to_user_id": "111", "created_at": now},
         {"id": "401", "text": "@edt 오늘도 감사해요", "author_id": "333",
          "conversation_id": "c2", "in_reply_to_user_id": "111", "created_at": now},
+        {"id": "402", "text": "@edt 잘 봤습니다!", "author_id": "444",
+         "conversation_id": "c3", "in_reply_to_user_id": "111", "created_at": now},
     ]
     monkeypatch.setattr(x_client, "get_x_client", lambda: object())
     monkeypatch.setattr(
@@ -101,8 +103,8 @@ def test_v1_budget_saved_per_write(monkeypatch):
     )
     monkeypatch.setattr(
         x_client, "fetch_mentions",
-        lambda _c, _u, _s: {"success": True, "tweets": two_pass, "users": {},
-                            "newest_id": "401", "error": None},
+        lambda _c, _u, _s: {"success": True, "tweets": three_pass, "users": {},
+                            "newest_id": "402", "error": None},
     )
     monkeypatch.setattr(
         x_client, "post_reply",
@@ -115,11 +117,13 @@ def test_v1_budget_saved_per_write(monkeypatch):
         lambda **_k: {"success": True, "data": [
             {"id": "400", "reply": "감사합니다, 큰 힘이 돼요"},
             {"id": "401", "reply": "따뜻한 말씀 감사드립니다"},
+            {"id": "402", "reply": "읽어주셔서 고맙습니다"},
         ]},
     )
 
     result = run_reply.main()
     assert result["published"] == 2
+    assert result["skip_reasons"]["RUN_CAP"] == 1
     assert len(mem.budget_saved) == 3
     # 마지막 저장분의 write_calls가 2인지 (집계 정확성)
     assert mem.budget_saved[-1]["write_calls"] == 2
@@ -127,5 +131,5 @@ def test_v1_budget_saved_per_write(monkeypatch):
 
 def test_versions_bumped_d_series():
     """D-1/V-1 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.5.0"
-    assert config.VERSION == "1.4.0"
+    assert run_reply.VERSION == "1.6.0"
+    assert config.VERSION == "1.5.0"

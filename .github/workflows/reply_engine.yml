@@ -1,7 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
-# v1.0.0 (2026-08-17)
+# v1.1.0 (2026-09-10)
 # ──────────────────────────────────────────────────────────────
 # 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
 #
@@ -12,7 +12,7 @@ name: X Reply Engine
 #   X_READ_COST_KRW / X_WRITE_COST_KRW : 호출 단가 (미설정 시 count 모드 fallback)
 #
 # [모드 우선순위] dispatch input > vars.REPLY_MODE > 'dry_run' (schedule 안전 기본값)
-# [cron] KST 10:17 / 13:17 / 18:17 / 22:17 — 비정각 오프셋 (안티봇 + Actions 정각 skip 방지)
+# [cron] KST 10:17 / 13:17 / 18:17 / 22:17 — Actions 혼잡 시간대 분산
 # ──────────────────────────────────────────────────────────────
 
 on:
@@ -26,6 +26,13 @@ on:
         type: choice
         options: [dry_run, shadow, live]
         default: dry_run
+      confirm_live:
+        description: "수동 live 실행 확인 (live 선택 시 필수)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 # L3 가드: cron + dispatch 동시 실행 차단 (중복 답글 방지)
 concurrency:
@@ -67,7 +74,7 @@ jobs:
     name: Reply Pipeline
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 40   # 시작 지터 5분 + 발행 딜레이 최대 10분 + 발행 간 지터(180s×7) 최악 36분 감안
+    timeout-minutes: 40   # 기본 회당 2건: 시작 5분 + 첫 발행 10분 + 발행 간 최대 3분
 
     steps:
       - name: Checkout
@@ -83,6 +90,17 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Validate live dispatch
+        env:
+          REQUESTED_MODE: ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
+          CONFIRM_LIVE: ${{ inputs.confirm_live || 'false' }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$REQUESTED_MODE" == "live" && "$CONFIRM_LIVE" != "true" ]]; then
+            echo "::error::수동 live 실행은 confirm_live를 선택해야 합니다."
+            exit 1
+          fi
 
       - name: Run Reply Engine
         env:
@@ -107,6 +125,7 @@ jobs:
           REPLY_MODE:             ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
           # v1.0.6 (2026-08-27): 일일 답글 상한 운영값 — 미등록 시 코드 기본값 8 (env_int 안전 파서)
           REPLY_DAILY_CAP:        ${{ vars.REPLY_DAILY_CAP }}
+          REPLY_RUN_CAP:          ${{ vars.REPLY_RUN_CAP }}
           REPLY_AUTHOR_DAILY_CAP: ${{ vars.REPLY_AUTHOR_DAILY_CAP }}
           REPLY_CONV_DAILY_CAP:   ${{ vars.REPLY_CONV_DAILY_CAP }}
           REPLY_MAX_AGE_HOURS:    ${{ vars.REPLY_MAX_AGE_HOURS }}
@@ -137,3 +156,4 @@ jobs:
             logs/reply_report_*.json
             logs/reply_*.log
           retention-days: 14
+          if-no-files-found: warn

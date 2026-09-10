@@ -144,3 +144,15 @@ def test_budget_snapshot_separates_daily_total_from_run_delta(monkeypatch):
         "gemini_calls": 1,
         "est_cost_krw": 50.0,
     }
+
+
+def test_operational_caps_are_bounded(monkeypatch):
+    """운영 변수 오입력으로 발행 보호 상한이 무력화되지 않는다."""
+    from reply_engine.config import env_int_clamped
+
+    monkeypatch.setenv("_CAP_TEST", "-1")
+    assert env_int_clamped("_CAP_TEST", 2, 1, 10) == 2
+    monkeypatch.setenv("_CAP_TEST", "999")
+    assert env_int_clamped("_CAP_TEST", 2, 1, 10) == 2
+    monkeypatch.setenv("_CAP_TEST", "4")
+    assert env_int_clamped("_CAP_TEST", 2, 1, 10) == 4
