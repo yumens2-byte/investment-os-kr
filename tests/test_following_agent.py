@@ -268,6 +268,12 @@ class _FMem:
         monkeypatch.setattr(
             store, "action_exists_for_mode", lambda pid, _mode: pid in self.actions
         )
+        monkeypatch.setattr(
+            store,
+            "action_ids_for_mode",
+            lambda ids, _mode: {pid for pid in ids if pid in self.actions},
+        )
+        monkeypatch.setattr(store, "cooldown_author_ids", lambda *_args: set())
         monkeypatch.setattr(store, "insert_action", self._insert)
         monkeypatch.setattr(
             store, "mark_executed",

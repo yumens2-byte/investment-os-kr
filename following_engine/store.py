@@ -24,6 +24,13 @@ _T_ACTION = "kr_following_action"
 
 CURSOR_ACCOUNT = "kr_following"
 
+_IN_CHUNK_SIZE = 50
+
+
+def _chunks(items: list[str], size: int = _IN_CHUNK_SIZE):
+    for index in range(0, len(items), size):
+        yield items[index:index + size]
+
 
 def action_exists(post_id: str) -> bool:
     try:
@@ -58,6 +65,62 @@ def action_exists_for_mode(post_id: str, mode: str) -> bool:
     except Exception as exc:
         logger.error(f"[FStore] action_exists_for_mode 실패: {exc}")
         return True
+
+
+def action_ids_for_mode(post_ids: list[str], mode: str) -> set[str]:
+    """모드별 중복 게시물 ID를 배치 조회한다. 실패 시 입력 전건을 차단한다."""
+    ids = [value for value in dict.fromkeys(post_ids) if value]
+    found: set[str] = set()
+    try:
+        for chunk in _chunks(ids):
+            result = (
+                get_client().table(_T_ACTION)
+                .select("post_id,execution_mode,action_status,actual_x_post_id")
+                .in_("post_id", chunk).execute()
+            )
+            found.update(
+                str(row["post_id"])
+                for row in (result.data or [])
+                if row.get("post_id") and (
+                    row.get("execution_mode") in {"live", mode}
+                    or row.get("actual_x_post_id")
+                )
+            )
+    except Exception as exc:
+        logger.error(f"[FStore] action_ids_for_mode 실패 → 전건 차단: {exc}")
+        return set(ids)
+    return found
+
+
+def cooldown_author_ids(author_ids: list[str], hours: int, mode: str) -> set[str]:
+    """작성자 쿨다운을 배치 조회한다. 실패 시 입력 작성자 전원을 차단한다."""
+    ids = [value for value in dict.fromkeys(author_ids) if value]
+    if not ids:
+        return set()
+    cutoff = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+    found: set[str] = set()
+    try:
+        for chunk in _chunks(ids):
+            query = (
+                get_client().table(_T_ACTION)
+                .select("author_id")
+                .in_("author_id", chunk)
+                .gte("created_at", cutoff)
+            )
+            if mode == "live":
+                query = query.eq("action_status", "EXECUTED")
+            else:
+                query = query.eq("would_execute", True).eq("execution_mode", mode)
+            result = query.execute()
+            found.update(
+                str(row["author_id"])
+                for row in (result.data or [])
+                if row.get("author_id")
+            )
+    except Exception as exc:
+        logger.error(f"[FStore] cooldown_author_ids 실패 → 전건 차단: {exc}")
+        return set(ids)
+    return found
 
 
 def insert_action(record: dict) -> bool:

@@ -14,6 +14,7 @@ RT형 게시물이 유입되어 첫 QUOTE 후보가 RT를 대상으로 삼음 (�
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from following_engine import store
 from following_engine.config import (
@@ -26,6 +27,22 @@ from following_engine.config import (
 VERSION = "1.0.1"
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DbContext:
+    duplicate_post_ids: set[str]
+    cooldown_author_ids: set[str]
+
+
+def build_db_context(tweets: list[dict], mode: str) -> DbContext:
+    """정적 필터 통과분의 중복/쿨다운을 최대 2개 배치 질의로 구성한다."""
+    return DbContext(
+        duplicate_post_ids=store.action_ids_for_mode([tweet["id"] for tweet in tweets], mode),
+        cooldown_author_ids=store.cooldown_author_ids(
+            [tweet["author_id"] for tweet in tweets], AUTHOR_COOLDOWN_HOURS, mode
+        ),
+    )
 
 
 def check_static(tweet: dict, my_user_id: str, blacklist: set[str]) -> tuple[bool, str | None]:
@@ -49,10 +66,23 @@ def check_static(tweet: dict, my_user_id: str, blacklist: set[str]) -> tuple[boo
     return True, None
 
 
-def check_db(tweet: dict, mode: str) -> tuple[bool, str | None]:
+def check_db(
+    tweet: dict,
+    mode: str,
+    context: DbContext | None = None,
+) -> tuple[bool, str | None]:
     """DB 가드 — 정적 통과 건만 호출 (조회 최소화)."""
-    if store.action_exists_for_mode(tweet["id"], mode):
+    duplicate = (
+        tweet["id"] in context.duplicate_post_ids
+        if context is not None else store.action_exists_for_mode(tweet["id"], mode)
+    )
+    if duplicate:
         return False, "DUP"
-    if store.author_in_cooldown(tweet["author_id"], AUTHOR_COOLDOWN_HOURS, mode):
+    cooldown = (
+        tweet["author_id"] in context.cooldown_author_ids
+        if context is not None
+        else store.author_in_cooldown(tweet["author_id"], AUTHOR_COOLDOWN_HOURS, mode)
+    )
+    if cooldown:
         return False, "AUTHOR_COOLDOWN"
     return True, None
