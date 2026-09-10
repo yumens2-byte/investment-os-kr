@@ -26,6 +26,10 @@ on:
         type: choice
         options: [dry_run, shadow, live]
         default: dry_run
+      confirm_live:
+        description: "타인 글 인용 발행을 이번 실행에 한해 승인"
+        type: boolean
+        default: false
 
 concurrency:
   group: following-agent
@@ -92,6 +96,11 @@ jobs:
           # 운영 제어 (GitHub Variables)
           FOLLOWING_ENABLED:        ${{ vars.FOLLOWING_ENABLED }}
           FOLLOWING_EXECUTION_MODE: ${{ inputs.mode || vars.FOLLOWING_EXECUTION_MODE || 'dry_run' }}
+          # LIVE는 저장소 스위치 + 수동 dispatch 승인 + 작성자 allowlist를 모두 요구한다.
+          # schedule 실행에는 confirm_live가 없으므로 mode가 잘못 설정돼도 발행되지 않는다.
+          FOLLOWING_LIVE_PUBLISH_ENABLED: ${{ vars.FOLLOWING_LIVE_PUBLISH_ENABLED }}
+          FOLLOWING_LIVE_APPROVED: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_live || false }}
+          FOLLOWING_TRUSTED_AUTHOR_IDS: ${{ vars.FOLLOWING_TRUSTED_AUTHOR_IDS }}
           X_MY_USER_ID:             ${{ vars.X_MY_USER_ID }}
           DAILY_BUDGET_KRW:         ${{ vars.DAILY_BUDGET_KRW }}
           X_READ_COST_KRW:          ${{ vars.X_READ_COST_KRW }}
@@ -102,6 +111,10 @@ jobs:
           FOLLOWING_REVIEW_MIN_RELEVANCE: ${{ vars.FOLLOWING_REVIEW_MIN_RELEVANCE }}
           FOLLOWING_MAX_ACTIONS_PER_RUN: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_RUN }}
           FOLLOWING_MAX_ACTIONS_PER_DAY: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_DAY }}
+
+          # 운영 장애 알림 (미설정 시 안전하게 no-op)
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID:   ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
 
         run: python run_following.py
 
