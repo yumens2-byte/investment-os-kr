@@ -69,3 +69,16 @@ def get_mode() -> str:
     if mode not in ("dry_run", "shadow", "live"):
         return "dry_run"
     return mode
+
+
+def is_live_publish_approved() -> bool:
+    """타인 글 자동 인용의 이중 승인 스위치. 둘 다 정확히 true여야 한다."""
+    enabled = os.environ.get("FOLLOWING_LIVE_PUBLISH_ENABLED", "").strip().lower()
+    approved = os.environ.get("FOLLOWING_LIVE_APPROVED", "").strip().lower()
+    return enabled == "true" and approved == "true"
+
+
+def get_trusted_author_ids() -> frozenset[str]:
+    """LIVE 인용을 허용한 X 사용자 ID. 숫자 ID만 인정하며 빈 목록은 전건 차단한다."""
+    raw = os.environ.get("FOLLOWING_TRUSTED_AUTHOR_IDS", "")
+    return frozenset(value.strip() for value in raw.split(",") if value.strip().isdigit())

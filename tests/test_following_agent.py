@@ -105,10 +105,10 @@ def test_prefilter_static_rules():
 
 
 def test_prefilter_db_rules(monkeypatch):
-    monkeypatch.setattr(prefilter.store, "action_exists", lambda _id: True)
+    monkeypatch.setattr(prefilter.store, "action_exists_for_mode", lambda _id, _mode: True)
     assert prefilter.check_db(_post(), "shadow")[1] == "DUP"
 
-    monkeypatch.setattr(prefilter.store, "action_exists", lambda _id: False)
+    monkeypatch.setattr(prefilter.store, "action_exists_for_mode", lambda _id, _mode: False)
     monkeypatch.setattr(prefilter.store, "author_in_cooldown", lambda *_a: True)
     assert prefilter.check_db(_post(), "shadow")[1] == "AUTHOR_COOLDOWN"
 
@@ -196,7 +196,10 @@ def test_decision_text_validation_and_similarity():
 # ---------------------------------------------------------------------------
 
 def test_live_safety_guard(monkeypatch):
-    monkeypatch.setattr(store, "action_exists", lambda _id: False)
+    monkeypatch.setenv("FOLLOWING_LIVE_PUBLISH_ENABLED", "true")
+    monkeypatch.setenv("FOLLOWING_LIVE_APPROVED", "true")
+    monkeypatch.setenv("FOLLOWING_TRUSTED_AUTHOR_IDS", "555")
+    monkeypatch.setattr(store, "action_exists_for_mode", lambda _id, _mode: False)
     monkeypatch.setattr(store, "author_in_cooldown", lambda *_a: False)
     cand = {"post_id": "p1", "author_id": "555", "action_type": "QUOTE",
             "generated_text": "데이터 흥미롭네요"}
@@ -211,7 +214,7 @@ def test_live_safety_guard(monkeypatch):
     assert executor.live_safety_guard(cand, 5, 0, 2)[1] == "GUARD_DAILY_LIMIT"
     assert executor.live_safety_guard(cand, 0, 2, 2)[1] == "GUARD_RUN_LIMIT"
 
-    monkeypatch.setattr(store, "action_exists", lambda _id: True)
+    monkeypatch.setattr(store, "action_exists_for_mode", lambda _id, _mode: True)
     assert executor.live_safety_guard(cand, 0, 0, 2)[1] == "GUARD_DUPLICATE"
 
 
@@ -230,6 +233,9 @@ class _FMem:
         monkeypatch.setenv("FOLLOWING_ENABLED", "true")
         monkeypatch.setenv("FOLLOWING_EXECUTION_MODE", mode_env)
         monkeypatch.setenv("X_MY_USER_ID", "111")
+        monkeypatch.setenv("FOLLOWING_LIVE_PUBLISH_ENABLED", "true")
+        monkeypatch.setenv("FOLLOWING_LIVE_APPROVED", "true")
+        monkeypatch.setenv("FOLLOWING_TRUSTED_AUTHOR_IDS", "555,666,777")
 
         monkeypatch.setattr(run_following, "get_blacklist_ids", lambda: set())
         monkeypatch.setattr(run_following, "get_cursor", lambda _a: None)
@@ -259,7 +265,9 @@ class _FMem:
             },
         )
 
-        monkeypatch.setattr(store, "action_exists", lambda pid: pid in self.actions)
+        monkeypatch.setattr(
+            store, "action_exists_for_mode", lambda pid, _mode: pid in self.actions
+        )
         monkeypatch.setattr(store, "insert_action", self._insert)
         monkeypatch.setattr(
             store, "mark_executed",
@@ -313,6 +321,19 @@ def test_pilot_dry_run_zero_writes_zero_db(monkeypatch):
     assert mem.writes == []            # 최중요: X Write = 0
     assert mem.actions == {}           # dry_run DB 무기록
     assert mem.cursor_saved == []      # 커서 미전진
+
+
+def test_pilot_dry_run_untrusted_author_is_review_only(monkeypatch):
+    mem = _FMem()
+    mem.install(monkeypatch, "dry_run")
+    monkeypatch.setenv("FOLLOWING_TRUSTED_AUTHOR_IDS", "999")  # 게시물 작성자는 555
+
+    result = run_following.main()
+
+    assert result["would_execute"] == 0
+    assert result["review"][0]["action_type"] == "REVIEW_ONLY"
+    assert result["review"][0]["decision_reason"] == "UNTRUSTED_AUTHOR_REVIEW"
+    assert result["review"][0]["result"] == "DRY_RUN_COMPLETED"
 
 
 def test_pilot_shadow_zero_writes_with_db(monkeypatch):
@@ -374,8 +395,8 @@ def test_pilot_live_guard_blocks_run_limit(monkeypatch):
             {"id": pid, "relevant": True, "category": "AI", "relevanceScore": 92,
              "importanceScore": 90, "engagementValue": 85, "contentValue": 88,
              "summary": "s", "recommendedAction": "QUOTE", "reason": "r",
-             "generatedText": f"의미 있는 데이터 포인트네요 {n}"}
-            for n, pid in enumerate(["p1", "p2", "p3"])
+             "generatedText": f"의미 있는 데이터 포인트네요 {suffix}"}
+            for suffix, pid in zip(("첫째", "둘째", "셋째"), ("p1", "p2", "p3"))
         ]},
     )
     result = run_following.main()
@@ -457,7 +478,11 @@ def test_j1_retry_recovers_from_invalid_json(monkeypatch):
         assert kwargs["max_tokens"] == fan.ANALYZER_MAX_TOKENS  # 8192 적용 확인
         if calls["n"] == 1:
             return {"success": True, "data": '{"truncated": ', "error": None}  # 잘림 재현
-        return {"success": True, "data": _valid_rows(items), "error": None}
+        return {
+            "success": True,
+            "data": _valid_rows([{"id": f"p{i}"} for i in range(1, len(items) + 1)]),
+            "error": None,
+        }
 
     monkeypatch.setattr(fan, "gemini_call", _flaky)
     result = fan.analyze_batch(items)
@@ -695,8 +720,8 @@ def test_l1_corrupted_id_excluded_not_misassigned(monkeypatch):
     assert list(result.keys()) == [_REAL_IDS[0]]
 
 
-def test_l1_raw_id_response_still_accepted(monkeypatch):
-    """모델이 원 ID를 정확히 반환하는 경우도 하위호환으로 수용."""
+def test_l1_raw_id_response_is_rejected(monkeypatch):
+    """프롬프트에 없는 원 ID 응답은 환각으로 간주해 보수적으로 제외."""
     from following_engine import analyzer as fan
 
     monkeypatch.setattr(
@@ -704,7 +729,7 @@ def test_l1_raw_id_response_still_accepted(monkeypatch):
         lambda **_k: {"success": True, "data": [_l1_row(_REAL_IDS[1])], "error": None},
     )
     result = fan.analyze_batch(_l1_items())
-    assert list(result.keys()) == [_REAL_IDS[1]]
+    assert result == {}
 
 
 def test_l1_alias_independent_per_chunk(monkeypatch):

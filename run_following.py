@@ -27,8 +27,15 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from core.alert import send_admin_alert
 from following_engine import analyzer, collector, decision, executor, prefilter, store
-from following_engine.config import MAX_ACTIONS_PER_DAY, MAX_ACTIONS_PER_RUN, get_mode, is_enabled
+from following_engine.config import (
+    MAX_ACTIONS_PER_DAY,
+    MAX_ACTIONS_PER_RUN,
+    get_mode,
+    get_trusted_author_ids,
+    is_enabled,
+)
 from reply_engine import budget as budget_mod
 from reply_engine import x_client
 from reply_engine.config import (
@@ -68,6 +75,18 @@ def _setup_logging() -> None:
 
 def _write_report(summary: dict, guard=None) -> None:
     """실행 요약 JSON (artifact + Job Summary 원본) — 실패해도 파이프라인 무영향."""
+    fetched = int(summary.get("fetched") or 0)
+    prefiltered = int(summary.get("prefiltered") or 0)
+    analyzed = int(summary.get("analyzed") or 0)
+    candidates = int(summary.get("candidates") or 0)
+    summary["funnel"] = {
+        "prefilter_rate": round(prefiltered / fetched, 4) if fetched else 0.0,
+        "analysis_success_rate": round(analyzed / prefiltered, 4) if prefiltered else 0.0,
+        "candidate_rate": round(candidates / analyzed, 4) if analyzed else 0.0,
+        "live_publish_rate": round(int(summary.get("actual_writes") or 0) / fetched, 4)
+        if fetched else 0.0,
+    }
+    summary["finished_at"] = datetime.now(UTC).isoformat()
     if guard is not None:
         summary["budget"] = guard.snapshot()
     try:
@@ -164,6 +183,7 @@ def main() -> dict:
         else:
             summary["exit_reason"] = "EXIT_TIMELINE_FETCH_FAIL"
         summary["fetch_error"] = fetched["error"]
+        send_admin_alert(f"Following Agent fetch failure: {summary['exit_reason']}")
         if db_write_allowed:
             upsert_budget(guard.row)
         _write_report(summary, guard)
@@ -212,9 +232,9 @@ def main() -> dict:
                     "metrics": t["metrics"],
                 }
                 for t in passed
-            ]
+            ],
+            on_call=guard.record_gemini,
         )
-        guard.record_gemini()
     summary["analyzed"] = len(analyses)
 
     # ── Step 5~7: Decision → 모드별 실행 ─────────────────────
@@ -229,7 +249,16 @@ def main() -> dict:
             _skip(post_id, "SKIP_AI_FAIL")   # fail-safe (문서 19장)
             continue
 
-        action_type, skip_reason = decision.decide(analysis, recent_texts)
+        action_type, skip_reason = decision.decide(analysis, recent_texts, tweet["text"])
+
+        # dry_run/shadow의 would_execute는 실제 LIVE 가능성을 뜻해야 한다. 신뢰 작성자
+        # allowlist 밖의 QUOTE는 검토 자료는 보존하되 자동 발행 후보로 계산하지 않는다.
+        if (
+            action_type == "QUOTE"
+            and mode != "live"
+            and tweet["author_id"] not in get_trusted_author_ids()
+        ):
+            action_type, skip_reason = "REVIEW_ONLY", "UNTRUSTED_AUTHOR_REVIEW"
 
         candidate = {
             "post_id": post_id,
@@ -250,6 +279,7 @@ def main() -> dict:
                 f"/E{analysis['engagement_value']}"
             ),
             "generated_text": candidate.get("generated_text", ""),
+            "decision_reason": skip_reason,
             "result": None,
         }
         summary["review"].append(entry)
@@ -351,15 +381,21 @@ def main() -> dict:
         upsert_budget(guard.row)   # 예산 즉시 저장 규약
 
         if actual_id:
-            store.mark_executed(post_id, actual_id)
-            entry["result"] = "EXECUTED"
+            recorded = store.mark_executed(post_id, actual_id)
+            entry["result"] = "EXECUTED" if recorded else "EXECUTED_RECORD_FAIL"
             executed_this_run += 1
             summary["actual_writes"] += 1
             recent_texts.append(candidate["generated_text"])
+            if not recorded:
+                _skip(post_id, "EXECUTED_RECORD_FAIL")
+                send_admin_alert(
+                    f"Following Agent DB record failure: post_id={post_id}, x_id={actual_id}"
+                )
         else:
             store.mark_failed(post_id, "PUBLISH_FAIL", "create_tweet 실패 (무재시도)")
             entry["result"] = "FAILED"
             _skip(post_id, "PUBLISH_FAIL")
+            send_admin_alert(f"Following Agent publish failure: post_id={post_id}")
 
         time.sleep(random.randint(PUBLISH_JITTER_MIN_SEC, PUBLISH_JITTER_MAX_SEC))
 

@@ -37,9 +37,38 @@ def action_exists(post_id: str) -> bool:
         return True  # 확인 불가 → 처리 금지
 
 
+def action_exists_for_mode(post_id: str, mode: str) -> bool:
+    """현재 모드에서 재처리하면 안 되는 이력인지 판단한다.
+
+    shadow 기록은 실제 X 발행이 아니므로 이후 live 승격을 막지 않는다. 반대로 live의
+    READY/FAILED 이력은 타임아웃 후 중복 발행 가능성까지 고려해 모두 재처리 금지한다.
+    조회 실패 역시 기존 L1 정책대로 차단한다.
+    """
+    try:
+        result = (
+            get_client().table(_T_ACTION)
+            .select("execution_mode,action_status,actual_x_post_id")
+            .eq("post_id", post_id).execute()
+        )
+        rows = result.data or []
+        return any(
+            row.get("execution_mode") in {"live", mode} or row.get("actual_x_post_id")
+            for row in rows
+        )
+    except Exception as exc:
+        logger.error(f"[FStore] action_exists_for_mode 실패: {exc}")
+        return True
+
+
 def insert_action(record: dict) -> bool:
     try:
-        result = get_client().table(_T_ACTION).insert(record).execute()
+        # post_id가 PK인 운영 스키마에서 shadow 검수 행을 live 행으로 안전하게 승격한다.
+        # live/실발행 이력은 action_exists_for_mode가 앞단에서 차단하므로 덮어쓰지 않는다.
+        result = (
+            get_client().table(_T_ACTION)
+            .upsert(record, on_conflict="post_id")
+            .execute()
+        )
         return bool(result.data)
     except Exception as exc:
         logger.error(f"[FStore] insert_action 실패 ({record.get('post_id')}): {exc}")

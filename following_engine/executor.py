@@ -20,6 +20,8 @@ from following_engine.config import (
     AUTHOR_COOLDOWN_HOURS,
     LIVE_ALLOWLIST,
     MAX_ACTIONS_PER_DAY,
+    get_trusted_author_ids,
+    is_live_publish_approved,
 )
 
 VERSION = "1.0.0"
@@ -34,6 +36,10 @@ def live_safety_guard(
     per_run_limit: int,
 ) -> tuple[bool, str | None]:
     """실 발행 직전 최종 가드 (문서 20장). 하나라도 실패 → SKIPPED_POLICY."""
+    if not is_live_publish_approved():
+        return False, "GUARD_LIVE_NOT_APPROVED"
+    if candidate.get("author_id") not in get_trusted_author_ids():
+        return False, "GUARD_AUTHOR_NOT_TRUSTED"
     if candidate["action_type"] not in LIVE_ALLOWLIST:
         return False, "GUARD_ACTION_NOT_ALLOWED"
     if not (candidate.get("generated_text") or "").strip():
@@ -42,7 +48,7 @@ def live_safety_guard(
         return False, "GUARD_DAILY_LIMIT"
     if executed_this_run >= per_run_limit:
         return False, "GUARD_RUN_LIMIT"
-    if store.action_exists(candidate["post_id"]):
+    if store.action_exists_for_mode(candidate["post_id"], "live"):
         return False, "GUARD_DUPLICATE"
     if store.author_in_cooldown(candidate["author_id"], AUTHOR_COOLDOWN_HOURS, "live"):
         return False, "GUARD_AUTHOR_COOLDOWN"
