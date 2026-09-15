@@ -36,7 +36,7 @@
 |---|---|---|
 | 높음 | 변수에 음수나 과도한 상한을 넣으면 보호 장치 의미가 약해짐 | 일/회/저자/대화/댓글 연령 상한을 코드에서 유효 범위로 강제 |
 | 높음 | 일일 상한만으로 한 번의 실행에 답글이 몰릴 수 있음 | `REPLY_RUN_CAP` 기본 2건 추가; live 직전에도 재검증 |
-| 높음 | 수동 실행에서 실수로 `live` 선택 | `confirm_live=true`가 없으면 수동 live 실행 실패 |
+| 높음 | 수동 실행에서 실수로 `live` 선택 | `confirm_live=true`가 확인되지 않으면 실패 대신 `shadow`로 안전 전환 |
 | 높음 | 타인 스레드에서 문맥·화자 역할이 뒤집힘 | 기본 비활성인 `REPLY_FOREIGN_THREAD_ENABLED=false` 유지 권장 |
 | 중간 | 반복 답글이 스팸/저품질로 보임 | 최근 30건 유사도 게이트, 배치 내 중복 검사, 저자당 1건/일 유지 |
 | 중간 | 커서 전진 뒤 live 발행 실패가 멘션 API에서 다시 수집되지 않음 | 최근 `PUBLISH_FAIL`을 DB에서 복구하고 모든 일/저자/대화 캡을 재검증 |
@@ -90,7 +90,9 @@ API 단가 변수는 현재 계약/Developer Portal의 값을 운영자가 입�
 1. `REPLY_ENABLED=false`, `REPLY_MODE=dry_run`으로 수동 실행하고 테스트와 artifact를 확인합니다.
 2. `REPLY_ENABLED=true`, `REPLY_MODE=dry_run`으로 실제 멘션 수집 범위만 확인합니다.
 3. 최소 3일간 `shadow`로 운영하며 `review`의 오분류, 역할 반전, 반복 문구를 전수 검수합니다.
-4. `REPLY_RUN_CAP=1`, 좋아요/타인 스레드 비활성 상태로 첫 live 수동 실행을 합니다.
+4. `REPLY_RUN_CAP=1`, 좋아요/타인 스레드 비활성 상태에서 `mode=live`와
+   `confirm_live=true`를 함께 선택해 첫 live 수동 실행을 합니다. 확인값이 전달되지
+   않으면 실행은 실패하지 않고 `shadow`로 전환되며 로그에 requested/effective mode가 남습니다.
 5. 정상 표본을 확인한 뒤에도 회당 2건, 저자당 1건/일을 기본으로 유지합니다.
 6. 403/429, `SPEND_CAP`, 커서 정체, 포화가 보이면 즉시 `REPLY_ENABLED=false`로 전환합니다.
 

@@ -29,6 +29,17 @@ def test_reply_workflow_forwards_all_scope_and_cursor_controls():
         assert f"${{{{ vars.{name} }}}}" in workflow
 
 
+def test_unconfirmed_manual_live_downgrades_instead_of_failing_job():
+    workflow = Path(".github/workflows/reply_engine.yml").read_text()
+    validate = workflow.split("- name: Validate live dispatch", 1)[1].split(
+        "- name: Run Reply Engine", 1
+    )[0]
+    assert "github.event.inputs.confirm_live" in validate
+    assert 'effective_mode="shadow"' in validate
+    assert 'echo "REPLY_MODE=$effective_mode" >> "$GITHUB_ENV"' in validate
+    assert "exit 1" not in validate
+
+
 def test_env_int_parser():
     import os
     os.environ["_H1_TEST"] = ""
