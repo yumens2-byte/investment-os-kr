@@ -1,6 +1,6 @@
-# X Reply Engine 운영·설계 가이드 (v1.6.0)
+# X Reply Engine 운영·설계 가이드 (v1.8.0)
 
-마지막 검토: **2026-09-10**
+마지막 검토: **2026-09-15**
 
 > 목표는 탐지 회피가 아니라 **내 게시글에 직접 달린 정상 댓글에만, 낮은 빈도로,
 > 관련성 있는 답글을 공식 X API로 발행**하는 것입니다. 지연이나 문구 다양화는
@@ -26,20 +26,29 @@
 9. 이력을 먼저 기록한 뒤 X 발행, 성공 직후 응답 ID와 예산 기록
 10. JSON 검수 리포트와 로그를 14일간 artifact로 보관
 
+각 실행은 Supabase `kr_reply_history`의 최근 7일 데이터를 한 번 조회해 원문 없이
+`history_metrics`(이력 수, 실제 응답 수·응답률, 상위 스킵 사유)를 리포트에 포함합니다.
+조회 장애는 `available=false`로 관측하되 답글 파이프라인은 계속 진행합니다.
+
 ## 2. 이번 검토에서 확인한 위험과 조치
 
 | 우선순위 | 위험 | 조치/운영 원칙 |
 |---|---|---|
 | 높음 | 변수에 음수나 과도한 상한을 넣으면 보호 장치 의미가 약해짐 | 일/회/저자/대화/댓글 연령 상한을 코드에서 유효 범위로 강제 |
 | 높음 | 일일 상한만으로 한 번의 실행에 답글이 몰릴 수 있음 | `REPLY_RUN_CAP` 기본 2건 추가; live 직전에도 재검증 |
-| 높음 | 수동 실행에서 실수로 `live` 선택 | `confirm_live=true`가 없으면 수동 live 실행 실패 |
+| 높음 | 수동 실행에서 실수로 `live` 선택 | `confirm_live=true`가 확인되지 않으면 커서를 보존하는 `dry_run`으로 안전 전환 |
 | 높음 | 타인 스레드에서 문맥·화자 역할이 뒤집힘 | 기본 비활성인 `REPLY_FOREIGN_THREAD_ENABLED=false` 유지 권장 |
 | 중간 | 반복 답글이 스팸/저품질로 보임 | 최근 30건 유사도 게이트, 배치 내 중복 검사, 저자당 1건/일 유지 |
+| 중간 | 커서 전진 뒤 live 발행 실패가 멘션 API에서 다시 수집되지 않음 | 최근 `PUBLISH_FAIL`을 DB에서 복구하고 모든 일/저자/대화 캡을 재검증 |
 | 중간 | 액션 토큰의 불필요한 권한 | workflow 권한을 `contents: read`로 명시 |
 | 중간 | 지터가 정책 준수 대신 '탐지 회피'로 오해될 수 있음 | 지터 목적을 동시 실행·순간 부하 분산으로 명시; 정책 우회에 사용 금지 |
 | 잔여 | 최대 100건 수집이 포화되면 더 오래된 멘션이 누락될 수 있음 | `collection_saturated` 경고 감시; 반복 발생 시 페이지네이션을 별도 설계 |
 | 잔여 | GitHub schedule은 정시 실행을 보장하지 않음 | 커서 정체 경고와 artifact를 함께 확인하고 필요 시 수동 dry-run 수행 |
 | 잔여 | API 성공 후 DB 갱신 전 프로세스가 종료되는 작은 중복 창 | 발행 재시도 없음과 이력 선기록 유지; 향후 X 응답 조회 기반 reconciliation 검토 |
+
+발행 성공 후 DB 확정 기록은 멱등 update를 최대 3회 수행합니다. 모두 실패하면
+`DB_CONFIRM_FAIL`을 리포트에 남기고 응답 트윗 ID를 포함한 관리자 알림을 전송해,
+자동 재발행으로 중복을 만들지 않고 수동 reconciliation이 가능하게 합니다.
 
 ## 3. 자연스러운 품질을 위한 안전 원칙
 
@@ -66,8 +75,10 @@
 | `REPLY_CONV_DAILY_CAP` | `3` | 같은 대화의 하루 답글 수(1~20) |
 | `REPLY_MAX_AGE_HOURS` | `24` | 오래된 댓글 폐기(1~168시간) |
 | `REPLY_MENTIONS_MAX_RESULTS` | `100` | 1회 멘션 조회 크기(5~100) |
+| `REPLY_CURSOR_STALE_WARN_HOURS` | `24` | 커서 미전진 경고 기준(시간) |
 | `REPLY_LIKE_ENABLED` | `false` | 답글과 무관한 자동 좋아요는 기본 금지 |
 | `REPLY_FOREIGN_THREAD_ENABLED` | `false` | 타인 원글 스레드 답글 금지 |
+| `REPLY_FOREIGN_THREAD_RUN_CAP` | `1` | opt-in 시 타인 스레드 회당 최대 답글 수 |
 | `X_MY_USER_ID` | 내 숫자 ID | `get_me` 호출 절약; 계정 변경 시 반드시 갱신 |
 
 API 단가 변수는 현재 계약/Developer Portal의 값을 운영자가 입력해야 합니다. 단가를
@@ -79,13 +90,17 @@ API 단가 변수는 현재 계약/Developer Portal의 값을 운영자가 입�
 1. `REPLY_ENABLED=false`, `REPLY_MODE=dry_run`으로 수동 실행하고 테스트와 artifact를 확인합니다.
 2. `REPLY_ENABLED=true`, `REPLY_MODE=dry_run`으로 실제 멘션 수집 범위만 확인합니다.
 3. 최소 3일간 `shadow`로 운영하며 `review`의 오분류, 역할 반전, 반복 문구를 전수 검수합니다.
-4. `REPLY_RUN_CAP=1`, 좋아요/타인 스레드 비활성 상태로 첫 live 수동 실행을 합니다.
+4. `REPLY_RUN_CAP=1`, 좋아요/타인 스레드 비활성 상태에서 `mode=live`와
+   `confirm_live=true`를 함께 선택해 첫 live 수동 실행을 합니다. 확인값이 전달되지
+   않으면 실행은 실패하지 않고 `dry_run`으로 전환됩니다. `dry_run`은 DB 쓰기와
+   커서 전진을 하지 않으므로 확인값을 바로잡아 같은 멘션을 다시 실행할 수 있습니다.
+   로그에는 requested/effective mode가 남습니다.
 5. 정상 표본을 확인한 뒤에도 회당 2건, 저자당 1건/일을 기본으로 유지합니다.
 6. 403/429, `SPEND_CAP`, 커서 정체, 포화가 보이면 즉시 `REPLY_ENABLED=false`로 전환합니다.
 
 ## 6. 운영 체크리스트와 롤백
 
-매일 `published`, `skip_reasons`, `collection_saturated`, `cursor_stale_hours`,
+매일 `published`, `skip_reasons`, `history_metrics.response_rate`, `collection_saturated`, `cursor_stale_hours`,
 `user_id_mismatch`, 예산 스냅샷을 확인합니다. 발행량의 갑작스러운 증가, 동일 작성자
 반복, `PUBLISH_FAIL`, 403/429가 있으면 자동 재시도나 상한 상향을 하지 않습니다.
 

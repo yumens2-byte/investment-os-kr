@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 from reply_engine.config import env_int
 
@@ -14,6 +15,29 @@ _FOLLOWING_INT_ENVS = (
     "FOLLOWING_MAX_ACTIONS_PER_RUN", "FOLLOWING_MAX_ACTIONS_PER_DAY",
     "FOLLOWING_AUTHOR_COOLDOWN_HOURS",
 )
+
+
+def test_reply_workflow_forwards_all_scope_and_cursor_controls():
+    """코드에만 있고 Actions에 전달되지 않아 무효가 되는 운영 변수를 방지한다."""
+    workflow = Path(".github/workflows/reply_engine.yml").read_text()
+    for name in (
+        "REPLY_CURSOR_STALE_WARN_HOURS",
+        "REPLY_FOREIGN_THREAD_ENABLED",
+        "REPLY_FOREIGN_THREAD_RUN_CAP",
+    ):
+        assert f"{name}:" in workflow
+        assert f"${{{{ vars.{name} }}}}" in workflow
+
+
+def test_unconfirmed_manual_live_downgrades_without_consuming_cursor():
+    workflow = Path(".github/workflows/reply_engine.yml").read_text()
+    validate = workflow.split("- name: Validate live dispatch", 1)[1].split(
+        "- name: Run Reply Engine", 1
+    )[0]
+    assert "github.event.inputs.confirm_live" in validate
+    assert 'effective_mode="dry_run"' in validate
+    assert 'echo "REPLY_MODE=$effective_mode" >> "$GITHUB_ENV"' in validate
+    assert "exit 1" not in validate
 
 
 def test_env_int_parser():

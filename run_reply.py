@@ -75,7 +75,7 @@ from reply_engine.config import (
     is_like_enabled,
 )
 
-VERSION = "1.6.0"
+VERSION = "1.8.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -171,6 +171,8 @@ def main() -> dict:
         "likes": {"targets": 0, "liked": 0, "skipped": {}},
         "skip_reasons": {},
         "review": [],   # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
+        "history_metrics": None,  # 최근 DB 이력 기반 실제 응답 전환율
+        "recovered_failures": 0,  # 커서 뒤 DB에서 복구한 live 발행 실패
         "started_at": datetime.now(UTC).isoformat(),
     }
 
@@ -195,6 +197,7 @@ def main() -> dict:
     # ── Step 1: 예산 ──────────────────────────────────────────
     today = store.kst_today()
     guard = budget_mod.BudgetGuard(store.get_budget(today))
+    summary["history_metrics"] = store.get_history_metrics(days=7)
     if not guard.can_read():
         summary["exit_reason"] = "EXIT_BUDGET"
         _write_report(summary, guard)
@@ -276,6 +279,7 @@ def main() -> dict:
 
     tweets = fetched["tweets"]
     users = fetched["users"]
+    retry_rows = store.get_retryable_history(REPLY_RUN_CAP) if mode == "live" else []
     summary["collected"] = len(tweets)
     summary["collection_saturated"] = bool(fetched.get("saturated", False))   # R-3
     summary["oldest_id"] = fetched.get("oldest_id")
@@ -329,7 +333,7 @@ def main() -> dict:
     if db_write_allowed and fetched["newest_id"]:
         store.upsert_cursor(_ACCOUNT, fetched["newest_id"], my_user_id)
 
-    if not tweets:
+    if not tweets and not retry_rows:
         summary["success"] = True
         summary["exit_reason"] = "EXIT_NO_MENTIONS"
         if db_write_allowed:
@@ -458,6 +462,32 @@ def main() -> dict:
         else:
             logger.info("[Step5] 전건 외국어 — Gemini 생성 호출 없음 (R-9)")
 
+    # X 멘션 커서는 수집 직후 전진하므로 live 발행 실패는 다음 멘션 조회에 다시
+    # 나타나지 않는다. 재시도 창 안의 실패를 DB에서 복구하되 기존 캡을 재검증한다.
+    if retry_rows:
+        current_ids = {item["id"] for item in pass_items}
+        retry_tweets = [
+            {
+                "id": str(row["reply_tweet_id"]),
+                "text": row.get("comment_text") or "",
+                "author_id": str(row.get("author_id") or ""),
+                "conversation_id": str(row.get("conversation_id") or ""),
+                "label": row.get("classification") or "POSITIVE",
+                "_stored_response_text": row.get("response_text") or "",
+                "_retry": True,
+            }
+            for row in retry_rows if str(row["reply_tweet_id"]) not in current_ids
+        ]
+        retry_ctx = filter_mod.build_cap_context(retry_tweets) if retry_tweets else None
+        for tweet in retry_tweets:
+            admitted, reason = filter_mod.check_and_admit(tweet, retry_ctx)
+            if not admitted:
+                _skip(tweet["id"], f"RETRY_{reason}")
+                continue
+            pass_items.append(tweet)
+            replies[tweet["id"]] = tweet["_stored_response_text"]
+            summary["recovered_failures"] += 1
+
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
     responded_today = store.count_responded_today()
@@ -473,7 +503,10 @@ def main() -> dict:
         author_id = tweet["author_id"]
         conversation_id = tweet["conversation_id"]
         reply_text = (replies.get(tweet_id) or "").strip()
-        response_source = "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
+        if tweet.get("_retry"):
+            response_source = "DB_RETRY"
+        else:
+            response_source = "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
 
         # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
         skip_reason: str | None = None
@@ -582,8 +615,15 @@ def main() -> dict:
         store.upsert_budget(guard.row)  # V-1: 발행마다 즉시 저장 (timeout 킬 시 집계 유실 방지)
 
         if response_tweet_id:
-            store.mark_responded(tweet_id, response_tweet_id)
+            persisted = store.mark_responded(tweet_id, response_tweet_id)
             review_entry["result"] = "PUBLISHED"
+            if not persisted:
+                review_entry["result"] = "PUBLISHED_DB_UNCONFIRMED"
+                _skip(tweet_id, "DB_CONFIRM_FAIL")
+                send_admin_alert(
+                    "Reply Engine DB confirmation failed: "
+                    f"tweet={tweet_id}, response={response_tweet_id}"
+                )
             recent_texts.append(reply_text)
             published_this_run += 1
             # R-2: 실발행 기준 캡 계수 (동일 저자·대화 중복 발행 차단)

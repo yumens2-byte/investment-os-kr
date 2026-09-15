@@ -1,7 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
-# v1.1.0 (2026-09-10)
+# v1.4.0 (2026-09-15)
 # ──────────────────────────────────────────────────────────────
 # 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
 #
@@ -94,13 +94,18 @@ jobs:
       - name: Validate live dispatch
         env:
           REQUESTED_MODE: ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
-          CONFIRM_LIVE: ${{ inputs.confirm_live || 'false' }}
+          # boolean input을 `||`로 문자열화하지 않는다. 이벤트 원문 값(true/false)을
+          # 직접 사용해 계정/UI별 expression coercion 차이를 제거한다.
+          CONFIRM_LIVE: ${{ github.event.inputs.confirm_live }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          effective_mode="$REQUESTED_MODE"
           if [[ "$EVENT_NAME" == "workflow_dispatch" && "$REQUESTED_MODE" == "live" && "$CONFIRM_LIVE" != "true" ]]; then
-            echo "::error::수동 live 실행은 confirm_live를 선택해야 합니다."
-            exit 1
+            echo "::warning::confirm_live가 확인되지 않아 live 대신 dry_run으로 안전 전환합니다."
+            effective_mode="dry_run"
           fi
+          echo "REPLY_MODE=$effective_mode" >> "$GITHUB_ENV"
+          echo "requested_mode=$REQUESTED_MODE effective_mode=$effective_mode confirm_live=${CONFIRM_LIVE:-false}"
 
       - name: Run Reply Engine
         env:
@@ -122,7 +127,6 @@ jobs:
 
           # 운영 제어 (GitHub Variables — HG-1/HG-3)
           REPLY_ENABLED:          ${{ vars.REPLY_ENABLED }}
-          REPLY_MODE:             ${{ inputs.mode || vars.REPLY_MODE || 'dry_run' }}
           # v1.0.6 (2026-08-27): 일일 답글 상한 운영값 — 미등록 시 코드 기본값 8 (env_int 안전 파서)
           REPLY_DAILY_CAP:        ${{ vars.REPLY_DAILY_CAP }}
           REPLY_RUN_CAP:          ${{ vars.REPLY_RUN_CAP }}
@@ -131,6 +135,10 @@ jobs:
           REPLY_MAX_AGE_HOURS:    ${{ vars.REPLY_MAX_AGE_HOURS }}
           REPLY_RETRY_WINDOW_HOURS: ${{ vars.REPLY_RETRY_WINDOW_HOURS }}
           REPLY_MENTIONS_MAX_RESULTS: ${{ vars.REPLY_MENTIONS_MAX_RESULTS }}
+          REPLY_CURSOR_STALE_WARN_HOURS: ${{ vars.REPLY_CURSOR_STALE_WARN_HOURS }}
+          # 타인 원글 스레드 응답은 명시적 opt-in. 미등록/false이면 코드 기본 차단.
+          REPLY_FOREIGN_THREAD_ENABLED: ${{ vars.REPLY_FOREIGN_THREAD_ENABLED }}
+          REPLY_FOREIGN_THREAD_RUN_CAP: ${{ vars.REPLY_FOREIGN_THREAD_RUN_CAP }}
           REPLY_PUBLISH_DELAY_MAX_SEC: ${{ vars.REPLY_PUBLISH_DELAY_MAX_SEC }}
           REPLY_LIKE_ENABLED:     ${{ vars.REPLY_LIKE_ENABLED }}
           REPLY_LIKE_PER_RUN:     ${{ vars.REPLY_LIKE_PER_RUN }}
