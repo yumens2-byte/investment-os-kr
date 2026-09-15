@@ -1,7 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
-# v1.3.0 (2026-09-15)
+# v1.4.0 (2026-09-15)
 # ──────────────────────────────────────────────────────────────
 # 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
 #
@@ -101,8 +101,8 @@ jobs:
         run: |
           effective_mode="$REQUESTED_MODE"
           if [[ "$EVENT_NAME" == "workflow_dispatch" && "$REQUESTED_MODE" == "live" && "$CONFIRM_LIVE" != "true" ]]; then
-            echo "::warning::confirm_live가 확인되지 않아 live 대신 shadow로 안전 전환합니다."
-            effective_mode="shadow"
+            echo "::warning::confirm_live가 확인되지 않아 live 대신 dry_run으로 안전 전환합니다."
+            effective_mode="dry_run"
           fi
           echo "REPLY_MODE=$effective_mode" >> "$GITHUB_ENV"
           echo "requested_mode=$REQUESTED_MODE effective_mode=$effective_mode confirm_live=${CONFIRM_LIVE:-false}"
