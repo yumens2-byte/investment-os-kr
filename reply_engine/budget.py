@@ -95,6 +95,17 @@ class BudgetGuard:
             logger.warning(f"[Budget] 읽기 차단: {self._snapshot()}")
         return allowed
 
+    def available_read_calls(self, maximum: int) -> int:
+        """현재 예산으로 허용되는 읽기 수를 ``maximum`` 이내에서 계산한다."""
+        maximum = max(0, int(maximum))
+        if self.cost_mode:
+            if self.read_cost == 0:
+                return maximum
+            remaining = max(0.0, self.limit_krw - float(self.row["est_cost_krw"]))
+            return min(maximum, int(remaining // self.read_cost))
+        remaining = max(0, FALLBACK_READ_CALLS_PER_DAY - int(self.row["read_calls"]))
+        return min(maximum, remaining)
+
     def can_write(self) -> bool:
         if self.cost_mode:
             projected = float(self.row["est_cost_krw"]) + self.write_cost

@@ -233,8 +233,8 @@ def test_t10b_mentions_max_results_raised_to_api_ceiling():
     assert config.MENTIONS_MAX_RESULTS == 100
 
 
-def test_t11_saturated_flag_true_when_limit_reached(monkeypatch):
-    """수집 건수가 상한과 같으면 포화로 표시된다."""
+def test_t11_full_page_without_next_token_is_complete(monkeypatch):
+    """정확히 상한 건이어도 next_token이 없으면 유실 없는 완전 수집이다."""
     from reply_engine import x_client
 
     monkeypatch.setattr(x_client, "MENTIONS_MAX_RESULTS", 2)
@@ -259,7 +259,8 @@ def test_t11_saturated_flag_true_when_limit_reached(monkeypatch):
 
     result = x_client.fetch_mentions(_Client(), "111", since_id=None)
 
-    assert result["saturated"] is True
+    assert result["saturated"] is False
+    assert result["collection_complete"] is True
     assert result["oldest_id"] == "1"
 
 

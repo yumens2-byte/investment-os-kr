@@ -111,6 +111,9 @@ PUBLISH_START_DELAY_MAX_SEC: int = env_int("REPLY_PUBLISH_DELAY_MAX_SEC", 600)
 # get_users_mentions는 max_results와 무관하게 읽기 1콜이므로 예산 증분 0.
 # 범위 밖 변수는 env_int_clamped가 기본값으로 되돌린다 (X API 400 차단).
 MENTIONS_MAX_RESULTS: int = env_int_clamped("REPLY_MENTIONS_MAX_RESULTS", 100, 5, 100)
+# 포화 시 pagination_token을 따라갈 최대 페이지 수. 3페이지면 실행당 최대 300건을
+# 회수하면서도 cron 4회 기준 count-mode 읽기 예산을 과도하게 잠식하지 않는다.
+MENTIONS_MAX_PAGES: int = env_int_clamped("REPLY_MENTIONS_MAX_PAGES", 3, 1, 5)
 
 # ---------------------------------------------------------------------------
 # 예산 count 모드 fallback 상한 (단가 미설정 시)

@@ -68,6 +68,55 @@ def test_fetch_mentions_api_failure():
     assert result["tweets"] == []
 
 
+def test_fetch_mentions_paginates_until_complete(monkeypatch):
+    monkeypatch.setattr(x_client, "MENTIONS_MAX_PAGES", 3)
+
+    def _tweet(tid, author):
+        return SimpleNamespace(
+            id=tid, text="감사", author_id=author, conversation_id=300,
+            in_reply_to_user_id=111, created_at=datetime.now(UTC),
+        )
+
+    responses = [
+        SimpleNamespace(data=[_tweet(102, 222)], includes={}, meta={
+            "newest_id": "102", "oldest_id": "102", "next_token": "older",
+        }),
+        SimpleNamespace(data=[_tweet(101, 333)], includes={}, meta={
+            "newest_id": "101", "oldest_id": "101",
+        }),
+    ]
+
+    class _Client:
+        def get_users_mentions(self, _id, **kwargs):
+            if len(responses) == 1:
+                assert kwargs["pagination_token"] == "older"
+            return responses.pop(0)
+
+    result = x_client.fetch_mentions(_Client(), "111", None)
+
+    assert [tweet["id"] for tweet in result["tweets"]] == ["102", "101"]
+    assert result["newest_id"] == "102"
+    assert result["oldest_id"] == "101"
+    assert result["pages_fetched"] == 2
+    assert result["collection_complete"] is True
+    assert result["saturated"] is False
+
+
+def test_fetch_mentions_page_limit_marks_collection_incomplete(monkeypatch):
+    monkeypatch.setattr(x_client, "MENTIONS_MAX_PAGES", 3)
+    resp = SimpleNamespace(data=[], includes={}, meta={"next_token": "more"})
+
+    class _Client:
+        def get_users_mentions(self, *_args, **_kwargs):
+            return resp
+
+    result = x_client.fetch_mentions(_Client(), "111", None, max_pages=1)
+
+    assert result["pages_fetched"] == 1
+    assert result["collection_complete"] is False
+    assert result["saturated"] is True
+
+
 def test_post_reply_no_retry():
     calls = {"n": 0}
 
@@ -259,6 +308,30 @@ def test_pilot_live_full_path(monkeypatch):
     assert result["skip_reasons"]["SPAM_LINK"] == 1
     assert mem.cursor_saved == [("kr_main", "102", "111")]   # 커서 전진
     assert len(mem.budget_saved) == 2                        # 발행 직후 1 + 종료 1 (V-1)
+
+
+def test_live_preserves_cursor_when_collection_is_incomplete(monkeypatch):
+    _base_env(monkeypatch, "live")
+    _quiet(monkeypatch)
+    mem = _MemStore()
+    mem.install(monkeypatch)
+    _install_x(monkeypatch, [])
+    monkeypatch.setattr(
+        x_client,
+        "fetch_mentions",
+        lambda *_a: {
+            "success": True, "tweets": [], "users": {}, "newest_id": "200",
+            "oldest_id": "101", "saturated": True, "pages_fetched": 3,
+            "collection_complete": False, "error": None,
+        },
+    )
+
+    result = run_reply.main()
+
+    assert result["collection_saturated"] is True
+    assert result["collection_pages"] == 3
+    assert result["cursor_advanced"] is False
+    assert mem.cursor_saved == []
 
 
 def test_live_recovers_publish_failure_after_cursor_advanced(monkeypatch):

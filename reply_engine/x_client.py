@@ -33,7 +33,7 @@ from typing import Any
 
 import tweepy
 
-from reply_engine.config import MENTIONS_MAX_RESULTS
+from reply_engine.config import MENTIONS_MAX_PAGES, MENTIONS_MAX_RESULTS
 
 VERSION = "1.4.0"
 
@@ -105,9 +105,10 @@ def fetch_mentions(
     client: tweepy.Client,
     my_user_id: str,
     since_id: str | None,
+    max_pages: int | None = None,
 ) -> dict[str, Any]:
     """
-    멘션 타임라인 1콜 수집 (페이지네이션 없음 — 초과분은 다음 실행 커서 처리).
+    멘션 타임라인을 제한된 페이지 수까지 수집한다.
 
     반환:
       {
@@ -118,7 +119,9 @@ def fetch_mentions(
         "users": { author_id: {username, created_at, followers}, ... },
         "newest_id": str | None,
         "oldest_id": str | None,     # R-3: 유실 구간 사후 추적용
-        "saturated": bool,           # R-3: 수집 상한 포화 = 미수집분 존재 가능
+        "saturated": bool,           # 페이지 상한 도달 = 미수집분 존재 가능
+        "pages_fetched": int,        # 실제 X API 읽기 호출 수
+        "collection_complete": bool, # next_token 없이 과거 구간까지 모두 회수했는지
         "error": str | None,
       }
     """
@@ -136,66 +139,85 @@ def fetch_mentions(
     if since_id:
         params["since_id"] = since_id
 
-    try:
-        resp = client.get_users_mentions(my_user_id, user_auth=True, **params)
-    except Exception as exc:
-        logger.error(f"[XClient] get_users_mentions 실패: {exc}")
-        return {"success": False, "tweets": [], "users": {}, "newest_id": None,
-                "oldest_id": None, "saturated": False, "error": str(exc)}
-
-    includes = getattr(resp, "includes", None) or {}
-
-    # R-12: includes.tweets = 참조된(부모) 트윗 본문. id -> text 매핑을 먼저 만든다.
-    referenced_texts: dict[str, str] = {}
-    for rt in includes.get("tweets", []) or []:
-        referenced_texts[str(rt.id)] = getattr(rt, "text", "") or ""
-
     tweets: list[dict] = []
-    if resp and resp.data:
-        for t in resp.data:
-            tweets.append(
-                {
-                    "id": str(t.id),
-                    "text": t.text or "",
-                    "author_id": str(t.author_id) if t.author_id else "",
-                    "conversation_id": str(t.conversation_id) if t.conversation_id else "",
-                    "in_reply_to_user_id": (
-                        str(t.in_reply_to_user_id) if t.in_reply_to_user_id else ""
-                    ),
-                    "created_at": t.created_at,  # datetime | None
-                    "parent_text": _parent_text(t, referenced_texts),   # R-12
-                }
-            )
-
     users: dict[str, dict] = {}
-    for u in includes.get("users", []) or []:
-        metrics = getattr(u, "public_metrics", None) or {}
-        users[str(u.id)] = {
-            "username": getattr(u, "username", "") or "",
-            "created_at": getattr(u, "created_at", None),
-            "followers": int(metrics.get("followers_count", 0)),
+    newest_id: str | None = None
+    oldest_id: str | None = None
+    next_token: str | None = None
+    pages_fetched = 0
+    partial_error: str | None = None
+
+    page_limit = max(1, min(MENTIONS_MAX_PAGES, max_pages or MENTIONS_MAX_PAGES))
+    for page in range(page_limit):
+        page_params = dict(params)
+        if next_token:
+            page_params["pagination_token"] = next_token
+        pages_fetched += 1
+        try:
+            resp = client.get_users_mentions(my_user_id, user_auth=True, **page_params)
+        except Exception as exc:
+            logger.error(f"[XClient] get_users_mentions 실패 (page={page + 1}): {exc}")
+            if pages_fetched == 1:
+                return {"success": False, "tweets": [], "users": {}, "newest_id": None,
+                        "oldest_id": None, "saturated": False, "pages_fetched": 1,
+                        "collection_complete": False, "error": str(exc)}
+            partial_error = str(exc)
+            break
+
+        includes = getattr(resp, "includes", None) or {}
+        referenced_texts = {
+            str(rt.id): getattr(rt, "text", "") or ""
+            for rt in (includes.get("tweets", []) or [])
         }
+        if resp and resp.data:
+            for t in resp.data:
+                tweets.append(
+                    {
+                        "id": str(t.id),
+                        "text": t.text or "",
+                        "author_id": str(t.author_id) if t.author_id else "",
+                        "conversation_id": str(t.conversation_id) if t.conversation_id else "",
+                        "in_reply_to_user_id": (
+                            str(t.in_reply_to_user_id) if t.in_reply_to_user_id else ""
+                        ),
+                        "created_at": t.created_at,
+                        "parent_text": _parent_text(t, referenced_texts),
+                    }
+                )
 
-    meta = getattr(resp, "meta", None) or {}
-    newest_id = meta.get("newest_id")
-    newest_id = str(newest_id) if newest_id else None
-    oldest_id = meta.get("oldest_id")
-    oldest_id = str(oldest_id) if oldest_id else None
+        for u in includes.get("users", []) or []:
+            metrics = getattr(u, "public_metrics", None) or {}
+            users[str(u.id)] = {
+                "username": getattr(u, "username", "") or "",
+                "created_at": getattr(u, "created_at", None),
+                "followers": int(metrics.get("followers_count", 0)),
+            }
 
-    # R-3: 수집 상한 포화 감지. 커서는 newest_id로 전진하므로
-    # 이번에 못 가져온 구간은 이후 어떤 실행에서도 재조회되지 않는다.
-    saturated = len(tweets) >= MENTIONS_MAX_RESULTS
+        meta = getattr(resp, "meta", None) or {}
+        if newest_id is None and meta.get("newest_id"):
+            newest_id = str(meta["newest_id"])
+        if meta.get("oldest_id"):
+            oldest_id = str(meta["oldest_id"])
+        next_token = meta.get("next_token")
+        if not next_token:
+            break
 
-    logger.info(f"[XClient] 멘션 수집 {len(tweets)}건 (newest_id={newest_id})")
+    collection_complete = not next_token and partial_error is None
+    saturated = not collection_complete
+    logger.info(
+        f"[XClient] 멘션 수집 {len(tweets)}건/{pages_fetched}페이지 "
+        f"(newest_id={newest_id}, complete={collection_complete})"
+    )
     if saturated:
         logger.warning(
-            f"[XClient] 수집 상한 포화 ({len(tweets)}/{MENTIONS_MAX_RESULTS}) — "
-            f"미수집 멘션 존재 가능. oldest_id={oldest_id} 이전 구간은 "
-            "커서 전진 후 재조회 불가 (R-3)"
+            f"[XClient] 수집 미완료 — cursor 보존 필요. pages={pages_fetched}, "
+            f"oldest_id={oldest_id}, error={partial_error}"
         )
 
     return {"success": True, "tweets": tweets, "users": users, "newest_id": newest_id,
-            "oldest_id": oldest_id, "saturated": saturated, "error": None}
+            "oldest_id": oldest_id, "saturated": saturated,
+            "pages_fetched": pages_fetched, "collection_complete": collection_complete,
+            "error": partial_error}
 
 
 def post_reply_with_error(
