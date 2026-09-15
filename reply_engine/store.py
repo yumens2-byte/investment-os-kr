@@ -38,7 +38,7 @@ from datetime import UTC, datetime, timedelta
 from db.supabase_client import get_client
 from reply_engine.config import REPLY_RETRY_WINDOW_HOURS
 
-VERSION = "1.2.0"
+VERSION = "1.4.0"
 
 logger = logging.getLogger(__name__)
 
@@ -136,24 +136,21 @@ def insert_history(record: dict) -> bool:
 
 
 def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
-    """발행 성공 직후 responded 갱신 (발행-기록 짝 규약)."""
-    try:
-        result = (
-            get_client()
-            .table(_T_HISTORY)
-            .update(
-                {
-                    "responded": True,
-                    "response_tweet_id": response_tweet_id,
-                }
+    """발행 성공 기록을 최대 3회 저장한다 (idempotent DB update)."""
+    for attempt in range(1, 4):
+        try:
+            result = (
+                get_client().table(_T_HISTORY)
+                .update({"responded": True, "response_tweet_id": response_tweet_id})
+                .eq("reply_tweet_id", reply_tweet_id).execute()
             )
-            .eq("reply_tweet_id", reply_tweet_id)
-            .execute()
-        )
-        return bool(result.data)
-    except Exception as exc:
-        logger.error(f"[Store] mark_responded 실패 ({reply_tweet_id}): {exc}")
-        return False
+            if result.data:
+                return True
+        except Exception as exc:
+            logger.error(
+                f"[Store] mark_responded 실패 ({reply_tweet_id}, {attempt}/3): {exc}"
+            )
+    return False
 
 
 def update_skip_reason(
@@ -209,6 +206,68 @@ def count_conversation_responded_today(conversation_id: str) -> int:
 def count_responded_today() -> int:
     """일일 답글 상한 체크용 총 발행 수."""
     return _count_today("", "", responded_only=True)
+
+
+def get_history_metrics(days: int = 7) -> dict:
+    """최근 이력의 전환율과 주요 차단 사유를 한 번의 DB 조회로 집계한다."""
+    since = (datetime.now(UTC) - timedelta(days=max(1, days))).isoformat()
+    try:
+        result = (
+            get_client().table(_T_HISTORY)
+            .select("responded,skip_reason,response_tweet_id")
+            .eq("mode", "live").gte("created_at", since).limit(5000).execute()
+        )
+        rows = result.data or []
+        responded = sum(
+            bool(row.get("response_tweet_id") or row.get("responded")) for row in rows
+        )
+        skips: dict[str, int] = {}
+        for row in rows:
+            reason = row.get("skip_reason")
+            if reason:
+                skips[str(reason)] = skips.get(str(reason), 0) + 1
+        total = len(rows)
+        return {
+            "available": True,
+            "lookback_days": max(1, days),
+            "history_rows": total,
+            "responded": responded,
+            "response_rate": round(responded / total, 4) if total else 0.0,
+            "skip_reasons": dict(
+                sorted(skips.items(), key=lambda item: (-item[1], item[0]))[:10]
+            ),
+            "truncated": total >= 5000,
+        }
+    except Exception as exc:
+        logger.warning(f"[Store] 운영 지표 조회 실패 (발행 계속): {exc}")
+        return {
+            "available": False,
+            "lookback_days": max(1, days),
+            "error": type(exc).__name__,
+        }
+
+
+def get_retryable_history(limit: int = 10) -> list[dict]:
+    """커서 전진 후 다시 수집되지 않는 최근 live 발행 실패를 DB에서 복구한다."""
+    try:
+        result = (
+            get_client().table(_T_HISTORY)
+            .select(
+                "reply_tweet_id,conversation_id,author_id,author_username,"
+                "comment_text,classification,response_text,skip_reason"
+            )
+            .eq("mode", "live").eq("responded", False)
+            .eq("skip_reason", "PUBLISH_FAIL")
+            .gte("created_at", _retry_cutoff_iso())
+            .order("created_at").limit(max(1, limit)).execute()
+        )
+        return [
+            row for row in (result.data or [])
+            if row.get("reply_tweet_id") and row.get("response_text")
+        ]
+    except Exception as exc:
+        logger.warning(f"[Store] 재시도 이력 조회 실패 (신규 처리 계속): {exc}")
+        return []
 
 
 # ---------------------------------------------------------------------------
