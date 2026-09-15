@@ -88,6 +88,24 @@ def test_insert_and_mark(monkeypatch):
     assert store.mark_responded("t1", "r1") is False
 
 
+def test_mark_responded_retries_transient_db_failure(monkeypatch):
+    calls = {"count": 0}
+
+    class _FlakyQuery(_FakeQuery):
+        def execute(self):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise RuntimeError("temporary db error")
+            return _FakeResult([{"reply_tweet_id": "t1"}])
+
+    query = _FlakyQuery(_FakeResult([]))
+    monkeypatch.setattr(
+        store, "get_client", lambda: type("Client", (), {"table": lambda _self, _name: query})()
+    )
+    assert store.mark_responded("t1", "r1") is True
+    assert calls["count"] == 3
+
+
 def test_counts_conservative_on_failure(monkeypatch):
     _patch_client(monkeypatch, data=[], count=2)
     assert store.count_responded_today() == 2
@@ -97,6 +115,31 @@ def test_counts_conservative_on_failure(monkeypatch):
     _patch_client(monkeypatch, fail=True)
     # 실패 시 매우 큰 값 → 상한 로직이 자동 차단
     assert store.count_responded_today() >= 10**9
+
+
+def test_history_metrics_aggregates_without_content(monkeypatch):
+    _patch_client(monkeypatch, data=[
+        {"responded": True, "response_tweet_id": "r1", "skip_reason": None},
+        {"responded": False, "response_tweet_id": None, "skip_reason": "GATE_ECHO"},
+        {"responded": False, "response_tweet_id": None, "skip_reason": "GATE_ECHO"},
+    ])
+    metrics = store.get_history_metrics(7)
+    assert metrics["history_rows"] == 3
+    assert metrics["responded"] == 1
+    assert metrics["response_rate"] == 0.3333
+    assert metrics["skip_reasons"] == {"GATE_ECHO": 2}
+
+
+def test_history_metrics_failure_is_non_blocking(monkeypatch):
+    _patch_client(monkeypatch, fail=True)
+    metrics = store.get_history_metrics()
+    assert metrics["available"] is False
+    assert metrics["error"] == "RuntimeError"
+
+
+def test_retryable_history_failure_is_non_blocking(monkeypatch):
+    _patch_client(monkeypatch, fail=True)
+    assert store.get_retryable_history() == []
 
 
 def test_recent_texts_and_blacklist(monkeypatch):
