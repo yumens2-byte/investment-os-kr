@@ -123,6 +123,15 @@ class _MemStore:
         monkeypatch.setattr(store, "insert_history", self._insert)
         monkeypatch.setattr(store, "mark_responded", self._mark)
         monkeypatch.setattr(store, "count_responded_today", lambda: self.responded_count)
+        monkeypatch.setattr(store, "get_retryable_history", lambda _limit=10: [])
+        monkeypatch.setattr(
+            store,
+            "get_history_metrics",
+            lambda days=7: {
+                "available": True, "lookback_days": days, "history_rows": 0,
+                "responded": 0, "response_rate": 0.0, "skip_reasons": {},
+            },
+        )
         monkeypatch.setattr(store, "get_recent_response_texts", lambda _n=30: [])
         monkeypatch.setattr(store, "get_cursor", lambda _a: self.cursor)
         monkeypatch.setattr(
@@ -250,6 +259,38 @@ def test_pilot_live_full_path(monkeypatch):
     assert result["skip_reasons"]["SPAM_LINK"] == 1
     assert mem.cursor_saved == [("kr_main", "102", "111")]   # 커서 전진
     assert len(mem.budget_saved) == 2                        # 발행 직후 1 + 종료 1 (V-1)
+
+
+def test_live_recovers_publish_failure_after_cursor_advanced(monkeypatch):
+    """신규 멘션이 0건이어도 DB의 최근 PUBLISH_FAIL을 다시 발행한다."""
+    _base_env(monkeypatch, "live")
+    _quiet(monkeypatch)
+    mem = _MemStore()
+    mem.install(monkeypatch)
+    published: list = []
+    _install_x(monkeypatch, published)
+    monkeypatch.setattr(
+        x_client, "fetch_mentions",
+        lambda *_a: {"success": True, "tweets": [], "users": {}, "newest_id": None,
+                     "oldest_id": None, "saturated": False, "error": None},
+    )
+    monkeypatch.setattr(
+        run_reply.store,
+        "get_retryable_history",
+        lambda _limit: [{
+            "reply_tweet_id": "failed-1", "conversation_id": "conv-1",
+            "author_id": "author-1", "comment_text": "좋은 글 감사합니다",
+            "classification": "POSITIVE", "response_text": "좋게 봐주셔서 감사해요",
+            "skip_reason": "PUBLISH_FAIL",
+        }],
+    )
+
+    result = run_reply.main()
+
+    assert result["recovered_failures"] == 1
+    assert result["published"] == 1
+    assert published == [("failed-1", "좋게 봐주셔서 감사해요")]
+    assert result["review"][-1]["source"] == "DB_RETRY"
 
 
 def test_pilot_dry_run_no_db_no_publish(monkeypatch):
