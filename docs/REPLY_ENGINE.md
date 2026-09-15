@@ -75,8 +75,10 @@
 | `REPLY_CONV_DAILY_CAP` | `3` | 같은 대화의 하루 답글 수(1~20) |
 | `REPLY_MAX_AGE_HOURS` | `24` | 오래된 댓글 폐기(1~168시간) |
 | `REPLY_MENTIONS_MAX_RESULTS` | `100` | 1회 멘션 조회 크기(5~100) |
+| `REPLY_CURSOR_STALE_WARN_HOURS` | `24` | 커서 미전진 경고 기준(시간) |
 | `REPLY_LIKE_ENABLED` | `false` | 답글과 무관한 자동 좋아요는 기본 금지 |
 | `REPLY_FOREIGN_THREAD_ENABLED` | `false` | 타인 원글 스레드 답글 금지 |
+| `REPLY_FOREIGN_THREAD_RUN_CAP` | `1` | opt-in 시 타인 스레드 회당 최대 답글 수 |
 | `X_MY_USER_ID` | 내 숫자 ID | `get_me` 호출 절약; 계정 변경 시 반드시 갱신 |
 
 API 단가 변수는 현재 계약/Developer Portal의 값을 운영자가 입력해야 합니다. 단가를
