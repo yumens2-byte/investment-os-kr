@@ -55,6 +55,7 @@ from reply_engine import budget as budget_mod
 from reply_engine import classifier, gate, generator, lang, store, x_client
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
+    MENTIONS_MAX_PAGES,
     PUBLISH_JITTER_MAX_SEC,
     PUBLISH_JITTER_MIN_SEC,
     PUBLISH_START_DELAY_MAX_SEC,
@@ -86,6 +87,7 @@ logger = logging.getLogger(__name__)
 # 테스트와 기존 통합 코드가 ``x_client.post_reply``를 교체하는 규약을 보존하면서,
 # 운영 기본 경로에서는 오류 원문까지 회수하기 위한 기준 참조다.
 _DEFAULT_POST_REPLY = x_client.post_reply
+_DEFAULT_FETCH_MENTIONS = x_client.fetch_mentions
 
 
 def _setup_logging() -> None:
@@ -160,6 +162,8 @@ def main() -> dict:
         "exit_reason": None,
         "collected": 0,
         "collection_saturated": False,   # R-3: 수집 상한 포화 (미수집분 존재 가능)
+        "collection_pages": 0,
+        "cursor_advanced": False,
         "oldest_id": None,               # R-3: 유실 구간 사후 추적용
         "candidates": 0,
         "classified_pass": 0,
@@ -260,8 +264,17 @@ def main() -> dict:
             _write_report(summary, guard)
             return summary
 
-    fetched = x_client.fetch_mentions(client, my_user_id, since_id)
-    guard.record_read()
+    # 운영 기본 경로는 DB의 당일 예산 잔여량 안에서만 추가 페이지를 읽는다.
+    # 대화 루트 소유자 검증 1콜을 남겨 수집만 성공하고 전건 미검증 스킵되는 상황을 막는다.
+    # 테스트/통합 코드가 레거시 3-인자 함수를 교체한 경우에는 기존 규약을 보존한다.
+    if x_client.fetch_mentions is _DEFAULT_FETCH_MENTIONS:
+        available_reads = guard.available_read_calls(MENTIONS_MAX_PAGES + 1)
+        fetch_pages = max(1, min(MENTIONS_MAX_PAGES, available_reads - 1))
+        fetched = x_client.fetch_mentions(client, my_user_id, since_id, max_pages=fetch_pages)
+    else:
+        fetched = x_client.fetch_mentions(client, my_user_id, since_id)
+    for _ in range(max(1, int(fetched.get("pages_fetched", 1)))):
+        guard.record_read()
     if not fetched["success"]:
         # N-1 (2026-08-25): 월간 지출 상한은 재시도로 풀리지 않는 플랫폼 사유 — 구분 보고
         if x_client.is_spend_cap_error(fetched.get("error")):
@@ -330,8 +343,14 @@ def main() -> dict:
                 like_summary["liked"] += 1
 
     # 커서 전진 (L2) — dry_run은 미전진
-    if db_write_allowed and fetched["newest_id"]:
-        store.upsert_cursor(_ACCOUNT, fetched["newest_id"], my_user_id)
+    summary["collection_pages"] = int(fetched.get("pages_fetched", 1))
+    collection_complete = bool(fetched.get("collection_complete", not fetched.get("saturated")))
+    if db_write_allowed and fetched["newest_id"] and collection_complete:
+        summary["cursor_advanced"] = store.upsert_cursor(
+            _ACCOUNT, fetched["newest_id"], my_user_id
+        )
+    elif db_write_allowed and fetched["newest_id"]:
+        logger.warning("[Step2] 수집 미완료로 cursor를 보존한다 — 다음 실행에서 backlog 재수집")
 
     if not tweets and not retry_rows:
         summary["success"] = True

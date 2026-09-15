@@ -74,7 +74,7 @@ jobs:
     name: Reply Pipeline
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 40   # 기본 회당 2건: 시작 5분 + 첫 발행 10분 + 발행 간 최대 3분
+    timeout-minutes: 45   # 기본 회당 2건 + 제한적 멘션 페이지네이션 여유
 
     steps:
       - name: Checkout
@@ -135,6 +135,7 @@ jobs:
           REPLY_MAX_AGE_HOURS:    ${{ vars.REPLY_MAX_AGE_HOURS }}
           REPLY_RETRY_WINDOW_HOURS: ${{ vars.REPLY_RETRY_WINDOW_HOURS }}
           REPLY_MENTIONS_MAX_RESULTS: ${{ vars.REPLY_MENTIONS_MAX_RESULTS }}
+          REPLY_MENTIONS_MAX_PAGES: ${{ vars.REPLY_MENTIONS_MAX_PAGES }}
           REPLY_CURSOR_STALE_WARN_HOURS: ${{ vars.REPLY_CURSOR_STALE_WARN_HOURS }}
           # 타인 원글 스레드 응답은 명시적 opt-in. 미등록/false이면 코드 기본 차단.
           REPLY_FOREIGN_THREAD_ENABLED: ${{ vars.REPLY_FOREIGN_THREAD_ENABLED }}
