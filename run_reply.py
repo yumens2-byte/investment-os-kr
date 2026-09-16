@@ -342,17 +342,23 @@ def main() -> dict:
             if store.insert_like(record):
                 like_summary["liked"] += 1
 
-    # 커서 전진 (L2) — dry_run은 미전진
+    # 커서 정보는 여기서 계산만 한다. 실제 전진은 모든 후보 처리가 끝난 뒤 수행한다.
+    # 수집 직후 전진하면 분류/생성/이력 저장 중 프로세스가 종료됐을 때 아직 DB에
+    # 기록되지 않은 멘션이 커서 뒤로 영구 유실될 수 있다.
     summary["collection_pages"] = int(fetched.get("pages_fetched", 1))
     collection_complete = bool(fetched.get("collection_complete", not fetched.get("saturated")))
-    if db_write_allowed and fetched["newest_id"] and collection_complete:
-        summary["cursor_advanced"] = store.upsert_cursor(
-            _ACCOUNT, fetched["newest_id"], my_user_id
-        )
-    elif db_write_allowed and fetched["newest_id"]:
+    cursor_can_advance = bool(
+        db_write_allowed and fetched["newest_id"] and collection_complete
+    )
+    cursor_safe_to_advance = cursor_can_advance
+    if db_write_allowed and fetched["newest_id"] and not collection_complete:
         logger.warning("[Step2] 수집 미완료로 cursor를 보존한다 — 다음 실행에서 backlog 재수집")
 
     if not tweets and not retry_rows:
+        if cursor_can_advance:
+            summary["cursor_advanced"] = store.upsert_cursor(
+                _ACCOUNT, fetched["newest_id"], my_user_id
+            )
         summary["success"] = True
         summary["exit_reason"] = "EXIT_NO_MENTIONS"
         if db_write_allowed:
@@ -592,6 +598,7 @@ def main() -> dict:
         if db_write_allowed:
             if not store.insert_history(record):
                 # INSERT 실패(PK 충돌 포함) → 발행 금지 (L1 최종 방어)
+                cursor_safe_to_advance = False
                 review_entry["result"] = "HISTORY_INSERT_FAIL"
                 _skip(tweet_id, "HISTORY_INSERT_FAIL")
                 continue
@@ -669,7 +676,18 @@ def main() -> dict:
         failure_counts = ", ".join(f"{key}={value}" for key, value in failures.items())
         send_admin_alert(f"Reply Engine failure: {failure_counts}")
 
-    # ── Step 8: 예산 저장 + 리포트 ────────────────────────────
+    # ── Step 8: 커서 확정 + 예산 저장 + 리포트 ───────────────
+    # 모든 후보가 terminal 처리된 뒤에만 커서를 전진한다. 이 지점 전 crash는 다음
+    # 실행에서 멘션을 재수집하며, history 멱등성 가드가 이미 처리된 건을 차단한다.
+    if cursor_safe_to_advance:
+        summary["cursor_advanced"] = store.upsert_cursor(
+            _ACCOUNT, fetched["newest_id"], my_user_id
+        )
+        if not summary["cursor_advanced"]:
+            logger.error("[Step8] cursor 저장 실패 — 다음 실행에서 안전하게 재수집한다")
+    elif cursor_can_advance:
+        logger.error("[Step8] history 저장 실패가 있어 cursor를 보존한다")
+
     if db_write_allowed:
         store.upsert_budget(guard.row)
 

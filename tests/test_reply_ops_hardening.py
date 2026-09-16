@@ -1,4 +1,4 @@
-"""2026-09-08 운영 점검 후속 (전부 승인): Q-1 외국어 무응답 / 항목1 like opt-in /
+"""2026-09-08 운영 점검 후속: 외국어 안전 정형 응답 / 항목1 like opt-in /
 항목2 오류 원문 저장·SPEND_CAP 구분 / 항목3 관리자 알림 / Q-3 선택형 중립 규칙."""
 
 from __future__ import annotations
@@ -20,14 +20,14 @@ def _tw(text):
 
 
 # ── Q-1 ────────────────────────────────────────────────────────────────
-def test_q1_foreign_comment_skipped():
-    """실사고 픽스처: 베트남어 댓글은 SKIP_FOREIGN (아는 척 응답 원천 차단)."""
-    ok, reason = filter_mod.check_tweet(
-        _tw("@tiger18272 30 chuyến/ngày thì đúng là biến nhiều"), None, "111", set()
-    )
-    assert not ok and reason == "SKIP_FOREIGN"
-    ok, reason = filter_mod.check_tweet(_tw("@tiger18272 Nice chart, thanks!"), None, "111", set())
-    assert not ok and reason == "SKIP_FOREIGN"
+def test_q1_foreign_comment_reaches_safe_generator():
+    """외국어 댓글은 AI 판단 없이 R-9 정형 응답 경로로 넘긴다."""
+    for text in (
+        "@tiger18272 30 chuyến/ngày thì đúng là biến nhiều",
+        "@tiger18272 Nice chart, thanks!",
+    ):
+        ok, reason = filter_mod.check_tweet(_tw(text), None, "111", set())
+        assert ok and reason is None
 
 
 def test_q1_korean_and_mixed_pass():
