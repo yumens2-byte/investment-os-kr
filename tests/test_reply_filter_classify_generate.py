@@ -167,3 +167,17 @@ def test_generate_batch_pool_fallback_deterministic(monkeypatch):
 
 def test_generate_batch_empty():
     assert generator.generate_batch([]) == {}
+
+
+def test_foreign_comment_reaches_safe_template_path():
+    """R-9: 외국어는 정적 필터에서 버리지 않고 정형 생성기로 넘긴다."""
+    tweet = {
+        "id": "foreign-1", "author_id": "other", "conversation_id": "conv",
+        "in_reply_to_user_id": "me", "text": "Nice analysis!",
+    }
+    passed, reason = filter_mod.check_tweet(tweet, None, "me", set())
+    assert (passed, reason) == (True, None)
+    generated = generator.generate_batch([
+        {"id": tweet["id"], "text": tweet["text"], "label": "POSITIVE"}
+    ])
+    assert generated[tweet["id"]]

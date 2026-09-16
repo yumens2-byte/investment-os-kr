@@ -167,3 +167,80 @@ def test_cursor_and_budget(monkeypatch):
 
     _patch_client(monkeypatch, data=[{"budget_date": "2026-08-17"}])
     assert store.upsert_budget({"budget_date": "2026-08-17", "read_calls": 1}) is True
+
+# ---------------------------------------------------------------------------
+# DB contract / data cross-check
+# ---------------------------------------------------------------------------
+
+def test_db_audit_detects_publish_state_corruption(monkeypatch):
+    from reply_engine import db_audit
+
+    history = [
+        {"reply_tweet_id": "t1", "responded": True, "response_tweet_id": None,
+         "skip_reason": None, "mode": "live"},
+        {"reply_tweet_id": "t2", "responded": True, "response_tweet_id": "r2",
+         "skip_reason": None, "mode": "live"},
+        {"reply_tweet_id": "t3", "responded": True, "response_tweet_id": "r2",
+         "skip_reason": None, "mode": "live"},
+    ]
+    monkeypatch.setattr(
+        db_audit, "_sample",
+        lambda table, _columns, _limit: history if table == "kr_reply_history" else [],
+    )
+
+    report = db_audit.audit_reply_db()
+
+    assert report["healthy"] is False
+    assert report["issues"]["publish_state_mismatch"] == 1
+    assert report["issues"]["duplicate_response_tweet_id"] == 1
+    assert report["samples"]["publish_state_mismatch"] == ["t1"]
+
+
+def test_db_audit_reports_schema_drift_without_leaking_errors(monkeypatch):
+    from reply_engine import db_audit
+
+    def fail_budget(table, _columns, _limit):
+        if table == "kr_reply_budget":
+            raise RuntimeError("secret database detail")
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", fail_budget)
+    report = db_audit.audit_reply_db()
+
+    assert report["healthy"] is False
+    assert report["schema_errors"] == {"kr_reply_budget": "RuntimeError"}
+    assert "secret" not in str(report)
+
+
+def test_db_audit_treats_likes_as_optional_when_feature_is_disabled(monkeypatch):
+    from reply_engine import db_audit
+
+    def missing_likes(table, _columns, _limit):
+        if table == "kr_reply_likes":
+            raise RuntimeError("table missing")
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", missing_likes)
+
+    report = db_audit.audit_reply_db(require_likes=False)
+
+    assert report["healthy"] is True
+    assert report["schema_errors"] == {}
+    assert report["optional_schema_errors"] == {"kr_reply_likes": "RuntimeError"}
+
+
+def test_db_audit_requires_likes_table_when_feature_is_enabled(monkeypatch):
+    from reply_engine import db_audit
+
+    def missing_likes(table, _columns, _limit):
+        if table == "kr_reply_likes":
+            raise RuntimeError("table missing")
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", missing_likes)
+
+    report = db_audit.audit_reply_db(require_likes=True)
+
+    assert report["healthy"] is False
+    assert report["schema_errors"] == {"kr_reply_likes": "RuntimeError"}
+    assert report["optional_schema_errors"] == {}

@@ -120,8 +120,8 @@ def check_tweet(
         if kw in text:
             return False, "SPAM_KEYWORD"
 
-    if not is_korean_dominant(body):
-        return False, "SKIP_FOREIGN"
+    # 외국어 댓글은 생성 단계에서 AI를 호출하지 않고 검수된 정형 문구로 응답한다.
+    # 여기서 제거하면 R-9 안전 경로 자체가 도달 불가능해진다.
 
     # 계정 휴리스틱 (user 정보가 있을 때만 — 없으면 통과)
     if user is not None:

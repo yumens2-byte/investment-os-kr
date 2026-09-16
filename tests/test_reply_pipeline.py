@@ -310,6 +310,22 @@ def test_pilot_live_full_path(monkeypatch):
     assert len(mem.budget_saved) == 2                        # 발행 직후 1 + 종료 1 (V-1)
 
 
+def test_live_preserves_cursor_when_history_is_not_durable(monkeypatch):
+    """이력 저장 실패 뒤 커서를 전진해 아직 미처리인 멘션을 유실하지 않는다."""
+    _base_env(monkeypatch, "live")
+    _quiet(monkeypatch)
+    mem = _MemStore()
+    mem.install(monkeypatch)
+    _install_x(monkeypatch, [])
+    monkeypatch.setattr(run_reply.store, "insert_history", lambda _record: False)
+
+    result = run_reply.main()
+
+    assert result["skip_reasons"]["HISTORY_INSERT_FAIL"] == 1
+    assert result["cursor_advanced"] is False
+    assert mem.cursor_saved == []
+
+
 def test_live_preserves_cursor_when_collection_is_incomplete(monkeypatch):
     _base_env(monkeypatch, "live")
     _quiet(monkeypatch)

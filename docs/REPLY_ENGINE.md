@@ -17,7 +17,7 @@
 
 1. `REPLY_ENABLED`와 실행 모드 확인
 2. 일일 API 비용/호출 예산 확인
-3. OAuth user context로 멘션 수집 및 커서 전진
+3. OAuth user context로 멘션 수집(커서는 전체 처리 완료 뒤 전진)
 4. 직접 답글, 자기 댓글, 블랙리스트, 연령, 링크·스팸 여부 필터링
 5. conversation root 작성자가 내 계정인지 별도 검증
 6. 긍정/호응 댓글만 default-deny 방식으로 분류
@@ -25,6 +25,15 @@
 8. 길이, 투자 권유, 질문, 멘션·링크, 원문 반향, 최근 문구 유사도 게이트
 9. 이력을 먼저 기록한 뒤 X 발행, 성공 직후 응답 ID와 예산 기록
 10. JSON 검수 리포트와 로그를 14일간 artifact로 보관
+
+파이프라인 실행 전에는 읽기 전용 DB preflight가 Reply 테이블의 필수 컬럼을
+조회하고, 최근 history에서 `responded`/`response_tweet_id` 불일치와 응답 ID 중복을
+검사합니다. 치명적 불일치나 schema drift가 있으면 Reply Engine을 실행하지 않으며,
+결과는 `reply_db_audit.json` artifact로 보존합니다. `live_without_terminal_state`는
+장애 조사용 관측 항목으로 보고하되, 발행 직전 정상 행도 잠시 해당할 수 있어 그
+항목만으로 실행을 차단하지 않습니다. `kr_reply_likes`는 좋아요 기능이 활성화됐을
+때만 필수 계약으로 검사하며, 기능이 꺼진 상태에서 테이블이 없으면 경고로만 기록해
+답글 dry-run과 본 파이프라인을 차단하지 않습니다.
 
 각 실행은 Supabase `kr_reply_history`의 최근 7일 데이터를 한 번 조회해 원문 없이
 `history_metrics`(이력 수, 실제 응답 수·응답률, 상위 스킵 사유)를 리포트에 포함합니다.
@@ -38,6 +47,8 @@
 | 높음 | 일일 상한만으로 한 번의 실행에 답글이 몰릴 수 있음 | `REPLY_RUN_CAP` 기본 2건 추가; live 직전에도 재검증 |
 | 높음 | 수동 실행에서 실수로 `live` 선택 | `confirm_live=true`가 확인되지 않으면 커서를 보존하는 `dry_run`으로 안전 전환 |
 | 높음 | 타인 스레드에서 문맥·화자 역할이 뒤집힘 | 기본 비활성인 `REPLY_FOREIGN_THREAD_ENABLED=false` 유지 권장 |
+| 높음 | 처리 도중 종료 시 선전진 커서 뒤의 멘션이 유실됨 | 모든 후보의 terminal 처리 후에만 커서 전진 |
+| 높음 | DB schema drift 또는 발행 상태 불일치 | 실행 전 읽기 전용 계약·데이터 cross-check, 이상 시 fail-closed |
 | 중간 | 반복 답글이 스팸/저품질로 보임 | 최근 30건 유사도 게이트, 배치 내 중복 검사, 저자당 1건/일 유지 |
 | 중간 | 커서 전진 뒤 live 발행 실패가 멘션 API에서 다시 수집되지 않음 | 최근 `PUBLISH_FAIL`을 DB에서 복구하고 모든 일/저자/대화 캡을 재검증 |
 | 중간 | 액션 토큰의 불필요한 권한 | workflow 권한을 `contents: read`로 명시 |

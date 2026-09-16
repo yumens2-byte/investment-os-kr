@@ -1,7 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
-# v1.4.0 (2026-09-15)
+# v1.5.0 (2026-09-16)
 # ──────────────────────────────────────────────────────────────
 # 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
 #
@@ -107,6 +107,14 @@ jobs:
           echo "REPLY_MODE=$effective_mode" >> "$GITHUB_ENV"
           echo "requested_mode=$REQUESTED_MODE effective_mode=$effective_mode confirm_live=${CONFIRM_LIVE:-false}"
 
+      - name: Cross-check Supabase schema and reply data
+        if: ${{ vars.REPLY_ENABLED == 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          REPLY_LIKE_ENABLED: ${{ vars.REPLY_LIKE_ENABLED }}
+        run: python -m scripts.check_reply_db
+
       - name: Run Reply Engine
         env:
           # X (Twitter) OAuth 1.0a
@@ -163,6 +171,7 @@ jobs:
           name: reply-report-${{ github.run_id }}
           path: |
             logs/reply_report_*.json
+            logs/reply_db_audit.json
             logs/reply_*.log
           retention-days: 14
           if-no-files-found: warn
