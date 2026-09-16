@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,9 @@ from reply_engine.db_audit import audit_reply_db
 
 
 def main() -> int:
-    report = audit_reply_db()
+    require_likes = os.getenv("REPLY_LIKE_ENABLED", "").strip().lower() == "true"
+    report = audit_reply_db(require_likes=require_likes)
+    report["feature_requirements"] = {"likes": require_likes}
     report["checked_at"] = datetime.now(UTC).isoformat()
     output = Path("logs/reply_db_audit.json")
     output.parent.mkdir(exist_ok=True)

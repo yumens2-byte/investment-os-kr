@@ -112,6 +112,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          REPLY_LIKE_ENABLED: ${{ vars.REPLY_LIKE_ENABLED }}
         run: python -m scripts.check_reply_db
 
       - name: Run Reply Engine

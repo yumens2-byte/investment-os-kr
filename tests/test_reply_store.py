@@ -210,3 +210,37 @@ def test_db_audit_reports_schema_drift_without_leaking_errors(monkeypatch):
     assert report["healthy"] is False
     assert report["schema_errors"] == {"kr_reply_budget": "RuntimeError"}
     assert "secret" not in str(report)
+
+
+def test_db_audit_treats_likes_as_optional_when_feature_is_disabled(monkeypatch):
+    from reply_engine import db_audit
+
+    def missing_likes(table, _columns, _limit):
+        if table == "kr_reply_likes":
+            raise RuntimeError("table missing")
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", missing_likes)
+
+    report = db_audit.audit_reply_db(require_likes=False)
+
+    assert report["healthy"] is True
+    assert report["schema_errors"] == {}
+    assert report["optional_schema_errors"] == {"kr_reply_likes": "RuntimeError"}
+
+
+def test_db_audit_requires_likes_table_when_feature_is_enabled(monkeypatch):
+    from reply_engine import db_audit
+
+    def missing_likes(table, _columns, _limit):
+        if table == "kr_reply_likes":
+            raise RuntimeError("table missing")
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", missing_likes)
+
+    report = db_audit.audit_reply_db(require_likes=True)
+
+    assert report["healthy"] is False
+    assert report["schema_errors"] == {"kr_reply_likes": "RuntimeError"}
+    assert report["optional_schema_errors"] == {}

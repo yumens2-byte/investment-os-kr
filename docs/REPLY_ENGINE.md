@@ -26,12 +26,14 @@
 9. 이력을 먼저 기록한 뒤 X 발행, 성공 직후 응답 ID와 예산 기록
 10. JSON 검수 리포트와 로그를 14일간 artifact로 보관
 
-파이프라인 실행 전에는 읽기 전용 DB preflight가 5개 Reply 테이블의 필수 컬럼을
+파이프라인 실행 전에는 읽기 전용 DB preflight가 Reply 테이블의 필수 컬럼을
 조회하고, 최근 history에서 `responded`/`response_tweet_id` 불일치와 응답 ID 중복을
 검사합니다. 치명적 불일치나 schema drift가 있으면 Reply Engine을 실행하지 않으며,
 결과는 `reply_db_audit.json` artifact로 보존합니다. `live_without_terminal_state`는
 장애 조사용 관측 항목으로 보고하되, 발행 직전 정상 행도 잠시 해당할 수 있어 그
-항목만으로 실행을 차단하지 않습니다.
+항목만으로 실행을 차단하지 않습니다. `kr_reply_likes`는 좋아요 기능이 활성화됐을
+때만 필수 계약으로 검사하며, 기능이 꺼진 상태에서 테이블이 없으면 경고로만 기록해
+답글 dry-run과 본 파이프라인을 차단하지 않습니다.
 
 각 실행은 Supabase `kr_reply_history`의 최근 7일 데이터를 한 번 조회해 원문 없이
 `history_metrics`(이력 수, 실제 응답 수·응답률, 상위 스킵 사유)를 리포트에 포함합니다.
