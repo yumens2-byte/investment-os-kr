@@ -206,13 +206,18 @@ def main() -> dict:
 
     # ── Step 3: PreFilter ─────────────────────────────────────
     blacklist = get_blacklist_ids()
-    passed: list[dict] = []
+    static_passed: list[dict] = []
     for tweet in tweets:
         ok, reason = prefilter.check_static(tweet, my_user_id, blacklist)
         if not ok:
             _skip(tweet["id"], reason)
             continue
-        ok, reason = prefilter.check_db(tweet, mode)
+        static_passed.append(tweet)
+
+    db_context = prefilter.build_db_context(static_passed, mode) if static_passed else None
+    passed: list[dict] = []
+    for tweet in static_passed:
+        ok, reason = prefilter.check_db(tweet, mode, db_context)
         if not ok:
             _skip(tweet["id"], reason)
             continue

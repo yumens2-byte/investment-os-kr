@@ -133,3 +133,13 @@ def test_action_write_upserts_shadow_to_live(monkeypatch):
     monkeypatch.setattr(store, "get_client", lambda: _Query())
     assert store.insert_action({"post_id": "p1", "execution_mode": "live"}) is True
     assert captured["on_conflict"] == "post_id"
+
+
+def test_prefilter_bulk_db_failure_blocks_every_candidate(monkeypatch):
+    class _Broken:
+        def table(self, _name):
+            raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(store, "get_client", lambda: _Broken())
+    assert store.action_ids_for_mode(["p1", "p2"], "shadow") == {"p1", "p2"}
+    assert store.cooldown_author_ids(["a1", "a2"], 24, "shadow") == {"a1", "a2"}
