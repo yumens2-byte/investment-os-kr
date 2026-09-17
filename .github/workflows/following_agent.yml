@@ -1,7 +1,7 @@
 name: X Following Agent
 
 # ──────────────────────────────────────────────────────────────
-# v1.0.0 (2026-08-20)
+# v1.3.0 (2026-09-17)
 # ──────────────────────────────────────────────────────────────
 # 팔로잉 홈 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 생성 (run_following.py)
 #
@@ -11,13 +11,13 @@ name: X Following Agent
 #   LIVE 허용 액션은 QUOTE만 (자동 Reply 금지 — REVIEW_ONLY 후보로만 적재)
 #
 # [모드 우선순위] dispatch input > vars.FOLLOWING_EXECUTION_MODE > 'dry_run'
-# [cron] KST 09:23 / 19:23 — 일 2회, 비정각 (Q4 승인)
+# [cron] 매시 23분 — 24시간 실행. 각 실행 후보 상한은 1~5 무작위이며 품질 미달 시 0건.
 # [예산] kr_reply_budget 공유 (reply engine과 합산 관리)
 # ──────────────────────────────────────────────────────────────
 
 on:
   schedule:
-    - cron: "23 0,10 * * *"
+    - cron: "23 * * * *"
 
   workflow_dispatch:
     inputs:
@@ -34,6 +34,9 @@ on:
 concurrency:
   group: following-agent
   cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -60,7 +63,7 @@ jobs:
     name: Following Agent
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 20   # QUOTE 최대 2건 + 발행 간 지터 감안
+    timeout-minutes: 30   # 후보 최대 5건 + 발행 간 지터 감안
 
     steps:
       - name: Checkout
@@ -109,8 +112,11 @@ jobs:
           FOLLOWING_MIN_CONTENT: ${{ vars.FOLLOWING_MIN_CONTENT }}
           FOLLOWING_MIN_ENGAGEMENT: ${{ vars.FOLLOWING_MIN_ENGAGEMENT }}
           FOLLOWING_REVIEW_MIN_RELEVANCE: ${{ vars.FOLLOWING_REVIEW_MIN_RELEVANCE }}
+          FOLLOWING_NEAR_MISS_REVIEW_ENABLED: ${{ vars.FOLLOWING_NEAR_MISS_REVIEW_ENABLED || 'false' }}
           FOLLOWING_MAX_ACTIONS_PER_RUN: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_RUN }}
           FOLLOWING_MAX_ACTIONS_PER_DAY: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_DAY }}
+          FOLLOWING_RUN_TARGET_MIN: ${{ vars.FOLLOWING_RUN_TARGET_MIN || '1' }}
+          FOLLOWING_RUN_TARGET_MAX: ${{ vars.FOLLOWING_RUN_TARGET_MAX || '5' }}
 
           # 운영 장애 알림 (미설정 시 안전하게 no-op)
           TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
