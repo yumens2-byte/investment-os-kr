@@ -52,7 +52,7 @@ from reply_engine.store import (
     upsert_cursor,
 )
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
@@ -269,6 +269,11 @@ def main() -> dict:
 
         action_type, skip_reason = decision.decide(analysis, recent_texts, tweet["text"])
 
+        # 점수 미달 후보와 SKIP 문안은 검증 전 LLM 초안이다. 리포트/DB에 노출해 사람이
+        # 승인 가능한 문안으로 오인하지 않도록 즉시 제거한다.
+        if action_type == "SKIP" or skip_reason == "NEAR_MISS_SCORE":
+            analysis["generated_text"] = ""
+
         # dry_run/shadow의 would_execute는 실제 LIVE 가능성을 뜻해야 한다. 신뢰 작성자
         # allowlist 밖의 QUOTE는 검토 자료는 보존하되 자동 발행 후보로 계산하지 않는다.
         if (
@@ -316,8 +321,7 @@ def main() -> dict:
         # 점수 미달 near-miss REVIEW_ONLY는 발행 후보가 아니므로 이 수량을 소비하지 않는다.
         target_candidate = action_type == "QUOTE" or (
             action_type == "REVIEW_ONLY"
-            and analysis.get("recommended_action") == "PERMITTED_REPLY"
-            and skip_reason is None
+            and skip_reason in {None, "UNTRUSTED_AUTHOR_REVIEW"}
         )
         if target_candidate:
             if selected_this_run >= run_target:
@@ -330,6 +334,9 @@ def main() -> dict:
                 continue
             selected_this_run += 1
             summary["selected"] += 1
+            # 같은 실행의 뒤 후보도 즉시 비교하게 해 서로 다른 원문에서 생성된 동일·유사
+            # 문구를 차단한다. 발행 성공 이후에만 추가하면 REVIEW_ONLY 중복이 누락된다.
+            recent_texts.append(candidate.get("generated_text", ""))
 
         # 일일 실제 발행 상한은 X Write가 가능한 QUOTE에만 적용한다.
         if action_type == "QUOTE":
@@ -352,7 +359,6 @@ def main() -> dict:
             if action_type == "QUOTE":
                 executed_this_run += 1
                 summary["would_execute"] += 1
-                recent_texts.append(candidate.get("generated_text", ""))
             continue
 
         if mode == "shadow":
@@ -368,7 +374,6 @@ def main() -> dict:
             if would:
                 executed_this_run += 1
                 summary["would_execute"] += 1
-                recent_texts.append(candidate.get("generated_text", ""))
             continue
 
         # ── live ──
@@ -414,7 +419,6 @@ def main() -> dict:
             entry["result"] = "EXECUTED" if recorded else "EXECUTED_RECORD_FAIL"
             executed_this_run += 1
             summary["actual_writes"] += 1
-            recent_texts.append(candidate["generated_text"])
             if not recorded:
                 _skip(post_id, "EXECUTED_RECORD_FAIL")
                 send_admin_alert(

@@ -17,7 +17,7 @@ import random
 
 from reply_engine.config import env_int
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # ── Decision 임계 (문서 13장, Q5 승인 초기값) ──
 MIN_RELEVANCE_SCORE: int = env_int("FOLLOWING_MIN_RELEVANCE", 85)
@@ -45,6 +45,8 @@ MIN_TEXT_LENGTH: int = 30
 
 # QUOTE 코멘트 규격
 QUOTE_MAX_LENGTH: int = 200
+# 실제 자동 생성 코멘트는 모바일 타임라인에서 한눈에 읽히는 한 문장으로 제한한다.
+COMMENT_MAX_LENGTH: int = 60
 
 # ── 관심 Topic (문서 10장 + 한국어 보강) ──
 TOPICS_INCLUDE: tuple[str, ...] = (

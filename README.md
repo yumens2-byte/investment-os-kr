@@ -1,4 +1,4 @@
-# investment-os-kr — X Reply Engine v1.6.0 + Following Agent v1.2.0
+# investment-os-kr — X Reply Engine v1.6.0 + Following Agent v1.3.0
 
 > X 답글 파이프라인의 최신 구조, 위험 분석, 권장 변수, 단계별 배포 및 롤백 절차는
 > **[Reply Engine 운영·설계 가이드](docs/REPLY_ENGINE.md)**를 기준으로 합니다.
