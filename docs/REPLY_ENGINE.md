@@ -27,11 +27,12 @@
 10. JSON 검수 리포트와 로그를 14일간 artifact로 보관
 
 파이프라인 실행 전에는 읽기 전용 DB preflight가 Reply 테이블의 필수 컬럼을
-조회하고, 최근 history에서 `responded`/`response_tweet_id` 불일치와 응답 ID 중복을
+최신순으로 조회하고, 최근 history에서 `responded`/`response_tweet_id` 불일치와 응답 ID 중복을
 검사합니다. 치명적 불일치나 schema drift가 있으면 Reply Engine을 실행하지 않으며,
 결과는 `reply_db_audit.json` artifact로 보존합니다. `live_without_terminal_state`는
-장애 조사용 관측 항목으로 보고하되, 발행 직전 정상 행도 잠시 해당할 수 있어 그
-항목만으로 실행을 차단하지 않습니다. `kr_reply_likes`는 좋아요 기능이 활성화됐을
+장애 조사용 관측 항목으로 보고합니다. 발행 직전 정상 행도 잠시 해당할 수 있어 60분
+유예시간을 적용하되, 그보다 오래된 미종결 live 행은 다음 실행을 차단합니다. 감사
+범위를 초과한 행이 있으면 `truncated=true`로 명시합니다. `kr_reply_likes`는 좋아요 기능이 활성화됐을
 때만 필수 계약으로 검사하며, 기능이 꺼진 상태에서 테이블이 없으면 경고로만 기록해
 답글 dry-run과 본 파이프라인을 차단하지 않습니다.
 

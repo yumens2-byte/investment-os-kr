@@ -244,3 +244,53 @@ def test_db_audit_requires_likes_table_when_feature_is_enabled(monkeypatch):
     assert report["healthy"] is False
     assert report["schema_errors"] == {"kr_reply_likes": "RuntimeError"}
     assert report["optional_schema_errors"] == {}
+
+
+def test_db_audit_uses_limit_plus_one_for_exact_truncation(monkeypatch):
+    from reply_engine import db_audit
+
+    requested_limits = {}
+
+    def sample(table, _columns, limit):
+        requested_limits[table] = limit
+        if table == "kr_reply_history":
+            return [
+                {"reply_tweet_id": str(index), "mode": "shadow", "responded": False,
+                 "response_tweet_id": None, "skip_reason": "SHADOW"}
+                for index in range(limit)
+            ]
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", sample)
+    report = db_audit.audit_reply_db(history_limit=2)
+
+    assert requested_limits["kr_reply_history"] == 3
+    assert report["rows_checked"] == 2
+    assert report["truncated"] is True
+
+
+def test_db_audit_blocks_only_stale_unfinished_live_rows(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from reply_engine import db_audit
+
+    now = datetime.now(UTC)
+    history = [
+        {"reply_tweet_id": "fresh", "mode": "live", "responded": False,
+         "response_tweet_id": None, "skip_reason": None,
+         "created_at": (now - timedelta(minutes=5)).isoformat()},
+        {"reply_tweet_id": "stale", "mode": "live", "responded": False,
+         "response_tweet_id": None, "skip_reason": None,
+         "created_at": (now - timedelta(hours=2)).isoformat()},
+    ]
+    monkeypatch.setattr(
+        db_audit, "_sample",
+        lambda table, _columns, _limit: history if table == "kr_reply_history" else [],
+    )
+
+    report = db_audit.audit_reply_db(terminal_grace_minutes=60)
+
+    assert report["healthy"] is False
+    assert report["issues"]["live_without_terminal_state"] == 2
+    assert report["issues"]["stale_live_without_terminal_state"] == 1
+    assert report["samples"]["stale_live_without_terminal_state"] == ["stale"]
