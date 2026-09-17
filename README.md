@@ -1,7 +1,9 @@
-# investment-os-kr — X Reply Engine v1.6.0 + Following Agent v1.0.0
+# investment-os-kr — X Reply Engine v1.6.0 + Following Agent v1.2.0
 
 > X 답글 파이프라인의 최신 구조, 위험 분석, 권장 변수, 단계별 배포 및 롤백 절차는
 > **[Reply Engine 운영·설계 가이드](docs/REPLY_ENGINE.md)**를 기준으로 합니다.
+> Following Agent의 시간별 실행·무작위 후보 상한·사람 검수 원칙은
+> **[24시간 보수 운영 설계](docs/FOLLOWING_AGENT.md)**를 따릅니다.
 
 **전환일**: 2026-08-17 | **역할 1 (INBOUND_REPLY)**: 내 게시글 댓글 자동 호응 답글 (`run_reply.py`, reply_engine/)
 **역할 2 (FOLLOWING_ENGAGEMENT, 2026-08-20)**: 팔로잉 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 (`run_following.py`, following_engine/) — 초기 배포 `FOLLOWING_ENABLED=false` + dry_run, LIVE 허용 액션은 QUOTE만 (자동 Reply 금지)
