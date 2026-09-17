@@ -108,12 +108,19 @@ jobs:
           echo "requested_mode=$REQUESTED_MODE effective_mode=$effective_mode confirm_live=${CONFIRM_LIVE:-false}"
 
       - name: Cross-check Supabase schema and reply data
-        if: ${{ vars.REPLY_ENABLED == 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           REPLY_LIKE_ENABLED: ${{ vars.REPLY_LIKE_ENABLED }}
-        run: python -m scripts.check_reply_db
+          REPLY_ENABLED_RAW: ${{ vars.REPLY_ENABLED }}
+        run: |
+          normalized="$(printf '%s' "$REPLY_ENABLED_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+          if [[ "$normalized" == "true" ]]; then
+            python -m scripts.check_reply_db
+          else
+            echo "### Reply Engine disabled" >> "$GITHUB_STEP_SUMMARY"
+            echo "DB preflight skipped because the kill switch is not enabled." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Run Reply Engine
         env:
