@@ -22,11 +22,12 @@ from following_engine.config import (
     MIN_RELEVANCE_SCORE,
     QUOTE_MAX_LENGTH,
     REVIEW_MIN_RELEVANCE,
+    is_near_miss_review_enabled,
 )
 from reply_engine.config import BANNED_WORDS
 from reply_engine.gate import jaccard_similarity
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,8 @@ def decide(
         # 참여형 추천(QUOTE/PERMITTED_REPLY)이면 자동 발행 없는 수동 후보로 적재.
         # 자동화 리스크 0 (REVIEW_ONLY는 어떤 모드에서도 발행되지 않음).
         if (
-            analysis["relevance_score"] >= REVIEW_MIN_RELEVANCE
+            is_near_miss_review_enabled()
+            and analysis["relevance_score"] >= REVIEW_MIN_RELEVANCE
             and analysis["recommended_action"] in ("QUOTE", "PERMITTED_REPLY")
         ):
             return "REVIEW_ONLY", "NEAR_MISS_SCORE"

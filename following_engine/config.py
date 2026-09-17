@@ -8,6 +8,7 @@ Following Engagement Agent 설정 (요구사항서 v2 + 승인 Q2~Q5 반영).
   FOLLOWING_EXECUTION_MODE    — dry_run | shadow | live (불명 값 → dry_run 강등)
   FOLLOWING_RUN_TARGET_MIN / FOLLOWING_RUN_TARGET_MAX — 실행별 무작위 후보 상한 범위
   FOLLOWING_MAX_ACTIONS_PER_RUN / FOLLOWING_MAX_ACTIONS_PER_DAY — 절대 상한 오버라이드
+  FOLLOWING_NEAR_MISS_REVIEW_ENABLED — 점수 미달 검수 후보 적재(기본 false)
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import random
 
 from reply_engine.config import env_int
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # ── Decision 임계 (문서 13장, Q5 승인 초기값) ──
 MIN_RELEVANCE_SCORE: int = env_int("FOLLOWING_MIN_RELEVANCE", 85)
@@ -61,6 +62,10 @@ TOPICS_INCLUDE: tuple[str, ...] = (
 TOPICS_EXCLUDE: tuple[str, ...] = (
     "giveaway", "promotion", "discount", "이벤트 당첨", "추첨", "프로모션",
     "할인", "리딩방", "오픈채팅", "무료 체험", "수익 보장", "광고", "홍보",
+    # 계정 핵심 범위 밖이며 맥락·정책 위험이 큰 정치/가상자산은 AI 키워드가 함께 있어도 제외.
+    "trump", "biden", "election", "congress", "democrat", "republican",
+    "대통령", "국회의원", "총선", "대선", "bitcoin", "crypto", "xrp", "rlusd",
+    "비트코인", "암호화폐", "가상자산", "코인",
 )
 
 # ── LIVE 허용 액션 (Q2 승인: QUOTE만. PERMITTED_REPLY는 REVIEW_ONLY 강등) ──
@@ -85,6 +90,11 @@ def is_live_publish_approved() -> bool:
     enabled = os.environ.get("FOLLOWING_LIVE_PUBLISH_ENABLED", "").strip().lower()
     approved = os.environ.get("FOLLOWING_LIVE_APPROVED", "").strip().lower()
     return enabled == "true" and approved == "true"
+
+
+def is_near_miss_review_enabled() -> bool:
+    """점수 미달 후보는 명시적으로 opt-in한 shadow 검수에서만 승격한다."""
+    return os.environ.get("FOLLOWING_NEAR_MISS_REVIEW_ENABLED", "").strip().lower() == "true"
 
 
 def get_trusted_author_ids() -> frozenset[str]:

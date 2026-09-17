@@ -52,7 +52,7 @@ from reply_engine.store import (
     upsert_cursor,
 )
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 

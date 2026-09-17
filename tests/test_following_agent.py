@@ -111,7 +111,16 @@ def test_prefilter_static_rules():
     assert prefilter.check_static(_post(), "me", {"555"})[1] == "BLACKLIST"
     assert prefilter.check_static(_post(text="짧은 글"), "me", set())[1] == "TOO_SHORT"
     assert prefilter.check_static(
+        _post(text="@someone 반도체 시장 관련해서 길게 이어진 대화입니다"), "me", set()
+    )[1] == "SKIP_REPLY_LIKE"
+    assert prefilter.check_static(
+        _post(text="＠someone 반도체 시장 관련해서 길게 이어진 대화입니다"), "me", set()
+    )[1] == "SKIP_REPLY_LIKE"
+    assert prefilter.check_static(
         _post(text="반도체 관련 무료 체험 이벤트를 소개합니다 지금 참여하세요"), "me", set()
+    )[1] == "TOPIC_EXCLUDE"
+    assert prefilter.check_static(
+        _post(text="AI와 crypto 결제를 함께 다루는 긴 시장 분석 글입니다"), "me", set()
     )[1] == "TOPIC_EXCLUDE"
     assert prefilter.check_static(
         _post(text="오늘 점심 메뉴 고민이 많았던 하루였습니다 다들 뭐 드셨나요 저는 국밥"),
@@ -178,9 +187,10 @@ def test_analyzer_failure_returns_empty(monkeypatch):
 # decision
 # ---------------------------------------------------------------------------
 
-def test_decision_order_and_mapping():
+def test_decision_order_and_mapping(monkeypatch):
     assert decision.decide(_analysis(relevant=False), []) == ("SKIP", "SKIP_NOT_RELEVANT")
-    # T-4 이후: 점수 미달이라도 R≥75 + 참여형 추천이면 REVIEW_ONLY 승격 (자동 발행 없음)
+    assert decision.decide(_analysis(relevance_score=84), []) == ("SKIP", "SKIP_SCORE")
+    monkeypatch.setenv("FOLLOWING_NEAR_MISS_REVIEW_ENABLED", "true")
     assert decision.decide(_analysis(relevance_score=84), []) == (
         "REVIEW_ONLY", "NEAR_MISS_SCORE"
     )
@@ -494,11 +504,11 @@ def test_following_versions():
     from following_engine import prefilter as p
     from following_engine import store as s
 
-    assert run_following.VERSION == "1.3.0"   # 짧은 문안 + 배치 중복 차단
-    assert config.VERSION == "1.2.0"   # 60자 절대 상한
+    assert run_following.VERSION == "1.4.0"   # near-miss default deny + reply-like 차단
+    assert config.VERSION == "1.3.0"   # near-miss opt-in
     assert a.VERSION == "1.3.0"        # 한 문장 짧은 reply 문안
-    assert p.VERSION == "1.0.1"        # K-1 (RT 유입 차단) 수정 반영
-    assert d.VERSION == "1.2.0"        # Unicode/상투어/길이 보수 검증
+    assert p.VERSION == "1.1.0"        # RT + reply-like 유입 차단
+    assert d.VERSION == "1.3.0"        # 점수 미달 default deny
     for mod in (c, e, s):
         assert mod.VERSION == "1.0.0"
 
@@ -659,8 +669,14 @@ def _t4_analysis(r, c, e, action="QUOTE"):
             "generated_text": "데이터 관점에서 흥미로운 지점입니다", "summary": "s", "reason": "r"}
 
 
-def test_t4_near_miss_promoted_to_review_only():
-    """실측 픽스처: 중국 메모리 글(R80/C75/E30) — SKIP_SCORE 대신 REVIEW_ONLY 승격."""
+def test_t4_near_miss_default_deny():
+    """점수 미달 후보는 기본 설정에서 SKIP한다."""
+    action, reason = decision.decide(_t4_analysis(80, 75, 30), [])
+    assert action == "SKIP" and reason == "SKIP_SCORE"
+
+
+def test_t4_near_miss_review_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("FOLLOWING_NEAR_MISS_REVIEW_ENABLED", "true")
     action, reason = decision.decide(_t4_analysis(80, 75, 30), [])
     assert action == "REVIEW_ONLY" and reason == "NEAR_MISS_SCORE"
 
@@ -688,6 +704,7 @@ def test_t4_e2e_review_only_never_publishes_hides_unvalidated_text(monkeypatch):
     """near-miss는 발행하지 않고 검증 전 LLM 문안도 승인 후보처럼 보존하지 않는다."""
     mem = _FMem()
     mem.install(monkeypatch, "live")
+    monkeypatch.setenv("FOLLOWING_NEAR_MISS_REVIEW_ENABLED", "true")
     monkeypatch.setattr(
         analyzer, "gemini_call",
         lambda **_k: {"success": True, "data": [{

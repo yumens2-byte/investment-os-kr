@@ -143,4 +143,5 @@ def test_workflow_runs_hourly_but_scheduled_live_has_no_approval():
     assert "permissions:\n  contents: read" in workflow
     assert "FOLLOWING_RUN_TARGET_MIN:" in workflow
     assert "FOLLOWING_RUN_TARGET_MAX:" in workflow
+    assert "FOLLOWING_NEAR_MISS_REVIEW_ENABLED:" in workflow
     assert "github.event_name == 'workflow_dispatch' && inputs.confirm_live" in workflow

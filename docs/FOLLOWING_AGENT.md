@@ -23,6 +23,8 @@ Following Agent는 팔로잉 홈 타임라인에서 투자 도메인과 직접 �
 2. `FOLLOWING_RUN_TARGET_MIN/MAX`를 각각 1~5로 보정한 뒤 실행 상한을 무작위 선택한다.
 3. 공유 API 예산, X 자격 증명, 홈 타임라인 읽기를 fail-closed로 검사한다.
 4. 자기 글, 차단 작성자, 짧은 글, 광고·프로모션, 비관심 주제를 정적 필터링한다.
+   선두 멘션으로 시작하는 답글형 텍스트와 계정 범위 밖의 정치·가상자산 주제도 AI 호출 전에
+   제외한다.
 5. Gemini가 관련성·내용 가치·참여 가치와 문안을 구조화 JSON으로 평가한다.
 6. 세 핵심 점수의 최솟값이 높은 순으로 정렬한다. 하나의 약한 점수를 높은 평균으로
    숨길 수 없으며 중요도는 동점 해소에만 쓴다.
@@ -45,6 +47,8 @@ Following Agent는 팔로잉 홈 타임라인에서 투자 도메인과 직접 �
 - `PERMITTED_REPLY`는 같은 텍스트 검증을 통과해도 사람이 원문 맥락을 확인하기 전에는
   발행하지 않는다.
 - 점수 미달 `NEAR_MISS_SCORE`와 모든 `SKIP`의 미검증 LLM 문안은 리포트와 DB에서 비운다.
+- 점수 미달 후보는 기본적으로 `SKIP_SCORE`다. 별도 검수 실험이 필요할 때만
+  `FOLLOWING_NEAR_MISS_REVIEW_ENABLED=true`로 opt-in하며 live 승격에는 사용하지 않는다.
 
 ## 4. 빈도와 안전 상한
 
@@ -56,6 +60,7 @@ Following Agent는 팔로잉 홈 타임라인에서 투자 도메인과 직접 �
 | `FOLLOWING_MAX_ACTIONS_PER_RUN` | `5` | 코드의 실행당 절대 상한 |
 | `FOLLOWING_MAX_ACTIONS_PER_DAY` | `24` | 하루 실제 액션 절대 상한; 시간당 최대치의 합보다 보수적 |
 | `FOLLOWING_AUTHOR_COOLDOWN_HOURS` | `24` | 동일 작성자 반복 관여 방지 |
+| `FOLLOWING_NEAR_MISS_REVIEW_ENABLED` | `false` | 점수 미달 후보 검수 적재 opt-in |
 | 코멘트 절대 상한 | `60자` | 한국어 한 문장, 줄바꿈·질문·느낌표 금지 |
 
 GitHub Actions schedule은 정확한 시각 실행을 보장하지 않는다. `concurrency`는 지연된 실행과

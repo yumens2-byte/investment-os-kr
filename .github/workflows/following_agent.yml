@@ -1,7 +1,7 @@
 name: X Following Agent
 
 # ──────────────────────────────────────────────────────────────
-# v1.2.0 (2026-09-17)
+# v1.3.0 (2026-09-17)
 # ──────────────────────────────────────────────────────────────
 # 팔로잉 홈 타임라인 분석 → QUOTE/REVIEW_ONLY 후보 생성 (run_following.py)
 #
@@ -112,6 +112,7 @@ jobs:
           FOLLOWING_MIN_CONTENT: ${{ vars.FOLLOWING_MIN_CONTENT }}
           FOLLOWING_MIN_ENGAGEMENT: ${{ vars.FOLLOWING_MIN_ENGAGEMENT }}
           FOLLOWING_REVIEW_MIN_RELEVANCE: ${{ vars.FOLLOWING_REVIEW_MIN_RELEVANCE }}
+          FOLLOWING_NEAR_MISS_REVIEW_ENABLED: ${{ vars.FOLLOWING_NEAR_MISS_REVIEW_ENABLED || 'false' }}
           FOLLOWING_MAX_ACTIONS_PER_RUN: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_RUN }}
           FOLLOWING_MAX_ACTIONS_PER_DAY: ${{ vars.FOLLOWING_MAX_ACTIONS_PER_DAY }}
           FOLLOWING_RUN_TARGET_MIN: ${{ vars.FOLLOWING_RUN_TARGET_MIN || '1' }}
