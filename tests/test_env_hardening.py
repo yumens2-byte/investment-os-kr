@@ -13,6 +13,7 @@ from reply_engine.config import env_int
 _FOLLOWING_INT_ENVS = (
     "FOLLOWING_MIN_RELEVANCE", "FOLLOWING_MIN_CONTENT", "FOLLOWING_MIN_ENGAGEMENT",
     "FOLLOWING_MAX_ACTIONS_PER_RUN", "FOLLOWING_MAX_ACTIONS_PER_DAY",
+    "FOLLOWING_RUN_TARGET_MIN", "FOLLOWING_RUN_TARGET_MAX",
     "FOLLOWING_AUTHOR_COOLDOWN_HOURS",
 )
 
@@ -62,8 +63,10 @@ def test_following_config_import_survives_empty_envs(monkeypatch):
         monkeypatch.setenv(name, "")
     try:
         importlib.reload(fc)   # 수정 전에는 여기서 ValueError로 크래시
-        assert fc.MAX_ACTIONS_PER_DAY == 5
-        assert fc.MAX_ACTIONS_PER_RUN == 2
+        assert fc.MAX_ACTIONS_PER_DAY == 24
+        assert fc.MAX_ACTIONS_PER_RUN == 5
+        assert fc.RUN_TARGET_MIN == 1
+        assert fc.RUN_TARGET_MAX == 5
         assert fc.MIN_RELEVANCE_SCORE == 85
         assert fc.AUTHOR_COOLDOWN_HOURS == 24
     finally:
@@ -95,4 +98,4 @@ def test_versions_bumped_h_series():
     import reply_engine.config as rc
 
     assert rc.VERSION == "1.5.0"
-    assert fc.VERSION == "1.0.2"
+    assert fc.VERSION == "1.2.0"

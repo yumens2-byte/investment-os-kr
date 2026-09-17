@@ -21,9 +21,9 @@ import logging
 from collections.abc import Callable
 
 from core.gemini_gateway import call as gemini_call
-from following_engine.config import QUOTE_MAX_LENGTH
+from following_engine.config import COMMENT_MAX_LENGTH, QUOTE_MAX_LENGTH
 
-VERSION = "1.1.0"
+VERSION = "1.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +93,14 @@ def _analyze_chunk(
         "- summary: 한국어 40자 이내 요약 (반드시 짧게)\n"
         "- recommendedAction: QUOTE(인용 코멘트 가치 있음) / PERMITTED_REPLY / SKIP 중 하나\n"
         "- reason: 판단 근거, 한국어 40자 이내 (반드시 짧게)\n"
-        f"- generatedText: recommendedAction이 QUOTE일 때만 작성 (그 외는 빈 문자열 \"\"), "
-        f"한국어 {QUOTE_MAX_LENGTH}자 이내 인용 코멘트.\n"
-        "  코멘트 규칙: 원문에 명시된 내용에 대한 짧은 관찰만 허용. 원문에 없는 숫자·기업·인물·"
+        "- generatedText: QUOTE 또는 PERMITTED_REPLY일 때만 작성. "
+        f"한국어 한 문장, 12~45자(절대 상한 {COMMENT_MAX_LENGTH}자).\n"
+        "  코멘트 규칙: 뉴스 요약이나 해설 대신 원문의 구체적인 한 지점에만 짧게 반응한다. "
+        "과장된 칭찬, 상투적 인사, 말투 흉내, 친분 암시를 피한다. "
+        "원문에 없는 숫자·기업·인물·"
         "사실·인과관계를 추가하지 말 것. 매수/매도 지시·수익 보장·확정적 전망 금지,\n"
-        "  해시태그·링크·멘션 금지, 질문으로 끝내지 말 것, 원문 문장 복사 금지\n\n"
+        "  '중요한 신호/가능성을 보여줍니다/시사합니다/도움이 됩니다' 같은 분석형 상투어 금지. "
+        "해시태그·링크·멘션·질문·느낌표·줄바꿈·원문 문장 복사 금지\n\n"
         + "<posts>\n"
         + "\n".join(lines)
         + "\n</posts>"
@@ -155,6 +158,8 @@ def _analyze_chunk(
             "summary": str(row.get("summary", ""))[:300],
             "recommended_action": action,
             "reason": str(row.get("reason", ""))[:300],
+            # 검증 전에 COMMENT_MAX_LENGTH로 자르면 긴 문장이 정상 문장처럼 통과할 수 있다.
+            # 저장 규격까지만 보존하고 Decision에서 원래 길이를 기준으로 fail-closed 처리한다.
             "generated_text": str(row.get("generatedText", "") or "").strip()[:QUOTE_MAX_LENGTH],
         }
     return analyses

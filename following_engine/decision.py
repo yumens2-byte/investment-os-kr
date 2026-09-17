@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 
 from following_engine.config import (
+    COMMENT_MAX_LENGTH,
     DUP_SIMILARITY_THRESHOLD,
     MIN_CONTENT_VALUE,
     MIN_ENGAGEMENT_VALUE,
@@ -24,7 +26,7 @@ from following_engine.config import (
 from reply_engine.config import BANNED_WORDS
 from reply_engine.gate import jaccard_similarity
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +36,11 @@ _IMPERATIVE_PATTERN = re.compile(
 )
 _NUMBER_PATTERN = re.compile(r"(?<![A-Za-z])\d+(?:[.,]\d+)?%?")
 _ASSERTIVE_PATTERN = re.compile(
-    r"(것으로\s?분석됩니다|영향으로\s?분석됩니다|전망됩니다|의미합니다|확실합니다|분명합니다)"
+    r"(것으로\s?분석됩니다|영향으로\s?분석됩니다|전망됩니다|의미합니다|확실합니다|분명합니다|"
+    r"중요한\s?신호|가능성을\s?보여|성장세를\s?보여|시사(?:합니다|하는군요|하네요)|"
+    r"도움이\s?(?:됩니다|될)|견조함|주목할\s?만|거시경제\s?분석)"
 )
+_HANGUL_PATTERN = re.compile(r"[가-힣]")
 
 
 def _source_copy_ratio(text: str, source_text: str) -> float:
@@ -46,7 +51,17 @@ def _source_copy_ratio(text: str, source_text: str) -> float:
 
 
 def _validate_quote_text(text: str, source_text: str = "") -> bool:
-    if not text or len(text) > QUOTE_MAX_LENGTH:
+    if not text or len(text) > min(QUOTE_MAX_LENGTH, COMMENT_MAX_LENGTH):
+        return False
+    if text != unicodedata.normalize("NFKC", text):
+        return False
+    if any(unicodedata.category(char) in {"Cc", "Cf"} for char in text):
+        return False
+    if not _HANGUL_PATTERN.search(text):
+        return False
+    if "\n" in text or "\r" in text or "!" in text or "！" in text:
+        return False
+    if len(re.findall(r"[.?。？]", text)) > 1:
         return False
     if (
         _FORMAT_PATTERN.search(text)
@@ -104,7 +119,13 @@ def decide(
         return "QUOTE", None
 
     if recommended == "PERMITTED_REPLY":
-        return "REVIEW_ONLY", None            # Q2: 자동 Reply 금지 — 마스터 승인형 후보
+        text = analysis.get("generated_text", "")
+        if not _validate_quote_text(text, source_text):
+            return "SKIP", "SKIP_TEXT_INVALID"
+        for prev in recent_texts:
+            if jaccard_similarity(text, prev) >= DUP_SIMILARITY_THRESHOLD:
+                return "SKIP", "SKIP_SIMILAR"
+        return "REVIEW_ONLY", None            # 자동 Reply 금지 — 사람 승인형 후보
 
     if recommended == "POST":
         return "SKIP", "SKIPPED_POLICY"       # Q3: Phase 1 범위 제외

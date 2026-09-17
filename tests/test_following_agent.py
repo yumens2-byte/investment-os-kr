@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import random
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -35,6 +36,22 @@ def test_enabled_and_mode_failsafe(monkeypatch):
     assert config.get_mode() == "dry_run"
     monkeypatch.delenv("FOLLOWING_EXECUTION_MODE", raising=False)
     assert config.get_mode() == "dry_run"
+
+
+def test_hourly_run_target_is_bounded_and_seedable(monkeypatch):
+    monkeypatch.setattr(config, "RUN_TARGET_MIN", 1)
+    monkeypatch.setattr(config, "RUN_TARGET_MAX", 5)
+    monkeypatch.setattr(config, "MAX_ACTIONS_PER_RUN", 5)
+    values = [config.choose_run_target(random.Random(seed)) for seed in range(30)]
+    assert all(1 <= value <= 5 for value in values)
+    assert len(set(values)) > 1
+
+
+def test_run_target_never_exceeds_absolute_cap(monkeypatch):
+    monkeypatch.setattr(config, "RUN_TARGET_MIN", 5)
+    monkeypatch.setattr(config, "RUN_TARGET_MAX", 5)
+    monkeypatch.setattr(config, "MAX_ACTIONS_PER_RUN", 2)
+    assert config.choose_run_target(random.Random(1)) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +208,21 @@ def test_decision_text_validation_and_similarity():
     assert decision.decide(_analysis(), [same])[1] == "SKIP_SIMILAR"
 
 
+def test_comment_is_short_grounded_and_single_sentence():
+    source = "엔비디아가 내년 칩 판매량 목표를 공개했습니다"
+    assert decision._validate_quote_text("내년 판매 목표가 꽤 공격적이네요.", source)
+    for bad in (
+        "가" * 61,
+        "AI 반도체 성장세를 보여주는 중요한 신호입니다.",
+        "고용 시장의 견조함을 시사하는군요.",
+        "첫 문장입니다. 두 번째 문장입니다.",
+        "짧지만\n두 줄입니다.",
+        "ＮＶＤＡ 흐름이 눈에 띄네요.",
+        "A notable development.",
+    ):
+        assert decision._validate_quote_text(bad, source) is False, bad
+
+
 # ---------------------------------------------------------------------------
 # executor guard
 # ---------------------------------------------------------------------------
@@ -211,7 +243,7 @@ def test_live_safety_guard(monkeypatch):
     assert executor.live_safety_guard(
         {**cand, "generated_text": " "}, 0, 0, 2
     )[1] == "GUARD_TEXT_BLANK"
-    assert executor.live_safety_guard(cand, 5, 0, 2)[1] == "GUARD_DAILY_LIMIT"
+    assert executor.live_safety_guard(cand, 24, 0, 2)[1] == "GUARD_DAILY_LIMIT"
     assert executor.live_safety_guard(cand, 0, 2, 2)[1] == "GUARD_RUN_LIMIT"
 
     monkeypatch.setattr(store, "action_exists_for_mode", lambda _id, _mode: True)
@@ -236,6 +268,7 @@ class _FMem:
         monkeypatch.setenv("FOLLOWING_LIVE_PUBLISH_ENABLED", "true")
         monkeypatch.setenv("FOLLOWING_LIVE_APPROVED", "true")
         monkeypatch.setenv("FOLLOWING_TRUSTED_AUTHOR_IDS", "555,666,777")
+        monkeypatch.setattr(run_following, "choose_run_target", lambda: 2)
 
         monkeypatch.setattr(run_following, "get_blacklist_ids", lambda: set())
         monkeypatch.setattr(run_following, "get_cursor", lambda _a: None)
@@ -375,7 +408,8 @@ def test_pilot_live_review_only_no_write(monkeypatch):
             "id": "p1", "relevant": True, "category": "MACRO",
             "relevanceScore": 92, "importanceScore": 90, "engagementValue": 85,
             "contentValue": 88, "summary": "s",
-            "recommendedAction": "PERMITTED_REPLY", "reason": "r", "generatedText": "",
+            "recommendedAction": "PERMITTED_REPLY", "reason": "r",
+            "generatedText": "공개된 근거를 차분히 짚은 점이 좋네요.",
         }]},
     )
     result = run_following.main()
@@ -403,6 +437,31 @@ def test_pilot_live_guard_blocks_run_limit(monkeypatch):
     assert result["actual_writes"] == 2                   # per-run 상한 2 (Q5)
     assert result["skip_reasons"]["RUN_LIMIT"] == 1
     assert len(mem.writes) == 2
+
+
+def test_dry_run_blocks_duplicate_drafts_within_same_batch(monkeypatch):
+    mem = _FMem()
+    posts = [_post(id="p1"), _post(id="p2", author_id="666")]
+    mem.install(monkeypatch, "dry_run", posts=posts)
+    duplicate = "내년 판매 목표가 꽤 공격적이네요."
+    monkeypatch.setattr(
+        analyzer,
+        "gemini_call",
+        lambda **_k: {"success": True, "data": [
+            {"id": pid, "relevant": True, "category": "AI", "relevanceScore": 95,
+             "importanceScore": 90, "engagementValue": 90, "contentValue": 92,
+             "summary": "s", "recommendedAction": "QUOTE", "reason": "r",
+             "generatedText": duplicate}
+            for pid in ("p1", "p2")
+        ]},
+    )
+
+    result = run_following.main()
+
+    assert result["selected"] == 1
+    assert result["would_execute"] == 1
+    assert result["skip_reasons"]["SKIP_SIMILAR"] == 1
+    assert result["review"][1]["generated_text"] == ""
 
 
 def test_pilot_timeline_fetch_fail_no_writes(monkeypatch):
@@ -435,11 +494,11 @@ def test_following_versions():
     from following_engine import prefilter as p
     from following_engine import store as s
 
-    assert run_following.VERSION == "1.1.0"   # T-4 사유 보존
-    assert config.VERSION == "1.0.2"   # T-4 REVIEW_MIN_RELEVANCE
-    assert a.VERSION == "1.1.0"        # J-1 잘림 + L-1 별칭 매핑
+    assert run_following.VERSION == "1.3.0"   # 짧은 문안 + 배치 중복 차단
+    assert config.VERSION == "1.2.0"   # 60자 절대 상한
+    assert a.VERSION == "1.3.0"        # 한 문장 짧은 reply 문안
     assert p.VERSION == "1.0.1"        # K-1 (RT 유입 차단) 수정 반영
-    assert d.VERSION == "1.1.0"        # T-4 near-miss REVIEW_ONLY
+    assert d.VERSION == "1.2.0"        # Unicode/상투어/길이 보수 검증
     for mod in (c, e, s):
         assert mod.VERSION == "1.0.0"
 
@@ -527,7 +586,7 @@ def test_j1_chunking_boundaries(monkeypatch):
 
 
 def test_j1_prompt_slimming(monkeypatch):
-    """응답 슬림화 규칙(40자 요약·QUOTE만 generatedText)이 프롬프트에 명시되는지."""
+    """응답 슬림화와 검수용 reply 문안 규칙이 프롬프트에 명시되는지."""
     from following_engine import analyzer as fan
 
     captured = {}
@@ -539,13 +598,13 @@ def test_j1_prompt_slimming(monkeypatch):
     monkeypatch.setattr(fan, "gemini_call", _cap)
     fan.analyze_batch(_mk_items(1))
     assert "40자 이내" in captured["prompt"]
-    assert "QUOTE일 때만" in captured["prompt"]
+    assert "QUOTE 또는 PERMITTED_REPLY일 때" in captured["prompt"]
 
 
 def test_j1_version_bumped():
     from following_engine import analyzer as fan
 
-    assert fan.VERSION == "1.1.0"
+    assert fan.VERSION == "1.3.0"
 
 
 # ---------------------------------------------------------------------------
@@ -625,8 +684,8 @@ def test_t4_full_pass_still_quote(monkeypatch):
     assert action == "QUOTE" and reason is None
 
 
-def test_t4_e2e_review_only_never_publishes_keeps_text(monkeypatch):
-    """near-miss 승격분은 live에서도 발행 0, 텍스트·사유가 DB에 보존 (수동 후보)."""
+def test_t4_e2e_review_only_never_publishes_hides_unvalidated_text(monkeypatch):
+    """near-miss는 발행하지 않고 검증 전 LLM 문안도 승인 후보처럼 보존하지 않는다."""
     mem = _FMem()
     mem.install(monkeypatch, "live")
     monkeypatch.setattr(
@@ -645,7 +704,7 @@ def test_t4_e2e_review_only_never_publishes_keeps_text(monkeypatch):
     assert row["action_type"] == "REVIEW_ONLY"
     assert row["action_status"] == "READY"
     assert row["skip_reason"] == "NEAR_MISS_SCORE"
-    assert row["generated_text"] == "공급망 데이터가 흥미롭습니다"
+    assert row["generated_text"] == ""
     assert row["would_execute"] is False
 
 
@@ -758,4 +817,4 @@ def test_l1_alias_independent_per_chunk(monkeypatch):
 def test_l1_version_bumped():
     from following_engine import analyzer as fan
 
-    assert fan.VERSION == "1.1.0"
+    assert fan.VERSION == "1.3.0"
