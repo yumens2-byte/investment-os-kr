@@ -104,7 +104,13 @@ def decide(
         return "QUOTE", None
 
     if recommended == "PERMITTED_REPLY":
-        return "REVIEW_ONLY", None            # Q2: 자동 Reply 금지 — 마스터 승인형 후보
+        text = analysis.get("generated_text", "")
+        if not _validate_quote_text(text, source_text):
+            return "SKIP", "SKIP_TEXT_INVALID"
+        for prev in recent_texts:
+            if jaccard_similarity(text, prev) >= DUP_SIMILARITY_THRESHOLD:
+                return "SKIP", "SKIP_SIMILAR"
+        return "REVIEW_ONLY", None            # 자동 Reply 금지 — 사람 승인형 후보
 
     if recommended == "POST":
         return "SKIP", "SKIPPED_POLICY"       # Q3: Phase 1 범위 제외

@@ -1,5 +1,7 @@
 """타인 글에 관여하는 Following Agent의 보수적 LIVE 경계 테스트."""
 
+from pathlib import Path
+
 from following_engine import analyzer, config, decision, executor, store
 
 
@@ -133,3 +135,12 @@ def test_action_write_upserts_shadow_to_live(monkeypatch):
     monkeypatch.setattr(store, "get_client", lambda: _Query())
     assert store.insert_action({"post_id": "p1", "execution_mode": "live"}) is True
     assert captured["on_conflict"] == "post_id"
+
+
+def test_workflow_runs_hourly_but_scheduled_live_has_no_approval():
+    workflow = Path(".github/workflows/following_agent.yml").read_text()
+    assert 'cron: "23 * * * *"' in workflow
+    assert "permissions:\n  contents: read" in workflow
+    assert "FOLLOWING_RUN_TARGET_MIN:" in workflow
+    assert "FOLLOWING_RUN_TARGET_MAX:" in workflow
+    assert "github.event_name == 'workflow_dispatch' && inputs.confirm_live" in workflow

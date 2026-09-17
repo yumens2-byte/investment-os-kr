@@ -23,7 +23,7 @@ from collections.abc import Callable
 from core.gemini_gateway import call as gemini_call
 from following_engine.config import QUOTE_MAX_LENGTH
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +93,11 @@ def _analyze_chunk(
         "- summary: 한국어 40자 이내 요약 (반드시 짧게)\n"
         "- recommendedAction: QUOTE(인용 코멘트 가치 있음) / PERMITTED_REPLY / SKIP 중 하나\n"
         "- reason: 판단 근거, 한국어 40자 이내 (반드시 짧게)\n"
-        f"- generatedText: recommendedAction이 QUOTE일 때만 작성 (그 외는 빈 문자열 \"\"), "
-        f"한국어 {QUOTE_MAX_LENGTH}자 이내 인용 코멘트.\n"
-        "  코멘트 규칙: 원문에 명시된 내용에 대한 짧은 관찰만 허용. 원문에 없는 숫자·기업·인물·"
+        "- generatedText: QUOTE 또는 PERMITTED_REPLY일 때 작성, "
+        f"한국어 {QUOTE_MAX_LENGTH}자 이내.\n"
+        "  코멘트 규칙: 글쓴이에게 직접 말하듯 1~2문장으로 쓰되 과장된 칭찬, 상투적 인사, "
+        "말투 흉내, 친분 암시를 피한다. 원문에서 구체적으로 확인되는 한 지점에만 짧게 반응한다. "
+        "원문에 없는 숫자·기업·인물·"
         "사실·인과관계를 추가하지 말 것. 매수/매도 지시·수익 보장·확정적 전망 금지,\n"
         "  해시태그·링크·멘션 금지, 질문으로 끝내지 말 것, 원문 문장 복사 금지\n\n"
         + "<posts>\n"

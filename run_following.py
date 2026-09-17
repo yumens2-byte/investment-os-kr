@@ -31,7 +31,7 @@ from core.alert import send_admin_alert
 from following_engine import analyzer, collector, decision, executor, prefilter, store
 from following_engine.config import (
     MAX_ACTIONS_PER_DAY,
-    MAX_ACTIONS_PER_RUN,
+    choose_run_target,
     get_mode,
     get_trusted_author_ids,
     is_enabled,
@@ -52,7 +52,7 @@ from reply_engine.store import (
     upsert_cursor,
 )
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 
@@ -103,7 +103,8 @@ def _write_report(summary: dict, guard=None) -> None:
 def main() -> dict:
     _setup_logging()
     mode = get_mode()
-    logger.info(f"[FollowingAgent] v{VERSION} 시작 | mode={mode}")
+    run_target = choose_run_target()
+    logger.info(f"[FollowingAgent] v{VERSION} 시작 | mode={mode} run_target={run_target}")
 
     summary: dict = {
         "version": VERSION,
@@ -114,8 +115,10 @@ def main() -> dict:
         "prefiltered": 0,
         "analyzed": 0,
         "candidates": 0,
+        "selected": 0,
         "would_execute": 0,
         "actual_writes": 0,
+        "run_target": run_target,
         "skip_reasons": {},
         "review": [],
         "started_at": datetime.now(UTC).isoformat(),
@@ -237,10 +240,25 @@ def main() -> dict:
         )
     summary["analyzed"] = len(analyses)
 
+    # API 반환 순서나 반응 수가 아니라 보수 점수의 최솟값이 높은 글부터 검토한다.
+    # 중요도는 동점일 때만 사용해 세 기준 중 하나가 약한 글이 앞서지 않게 한다.
+    passed.sort(
+        key=lambda tweet: (
+            min(
+                analyses.get(tweet["id"], {}).get("relevance_score", 0),
+                analyses.get(tweet["id"], {}).get("content_value", 0),
+                analyses.get(tweet["id"], {}).get("engagement_value", 0),
+            ),
+            analyses.get(tweet["id"], {}).get("importance_score", 0),
+        ),
+        reverse=True,
+    )
+
     # ── Step 5~7: Decision → 모드별 실행 ─────────────────────
     recent_texts = store.get_recent_generated_texts()
     executed_today = store.count_actions_today(mode) if mode != "dry_run" else 0
     executed_this_run = 0
+    selected_this_run = 0
 
     for tweet in passed:
         post_id = tweet["id"]
@@ -294,9 +312,15 @@ def main() -> dict:
                 )
             continue
 
-        # 상한 (per-run / per-day) — QUOTE에만 적용, REVIEW_ONLY는 무제한 적재
-        if action_type == "QUOTE":
-            if executed_this_run >= MAX_ACTIONS_PER_RUN:
+        # 확실한 PERMITTED_REPLY 검수안과 QUOTE만 무작위 후보 상한에 포함한다.
+        # 점수 미달 near-miss REVIEW_ONLY는 발행 후보가 아니므로 이 수량을 소비하지 않는다.
+        target_candidate = action_type == "QUOTE" or (
+            action_type == "REVIEW_ONLY"
+            and analysis.get("recommended_action") == "PERMITTED_REPLY"
+            and skip_reason is None
+        )
+        if target_candidate:
+            if selected_this_run >= run_target:
                 entry["result"] = "RUN_LIMIT"
                 _skip(post_id, "RUN_LIMIT")
                 if db_write_allowed:
@@ -304,6 +328,11 @@ def main() -> dict:
                         executor.build_record(candidate, mode, False, "SKIPPED", "RUN_LIMIT")
                     )
                 continue
+            selected_this_run += 1
+            summary["selected"] += 1
+
+        # 일일 실제 발행 상한은 X Write가 가능한 QUOTE에만 적용한다.
+        if action_type == "QUOTE":
             if executed_today + executed_this_run >= MAX_ACTIONS_PER_DAY:
                 entry["result"] = "DAILY_LIMIT"
                 _skip(post_id, "DAILY_LIMIT")
@@ -351,7 +380,7 @@ def main() -> dict:
             continue
 
         guard_ok, guard_code = executor.live_safety_guard(
-            candidate, executed_today, executed_this_run, MAX_ACTIONS_PER_RUN
+            candidate, executed_today, executed_this_run, run_target
         )
         if not guard_ok:
             entry["result"] = guard_code

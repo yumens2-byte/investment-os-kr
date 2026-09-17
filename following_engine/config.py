@@ -6,16 +6,18 @@ Following Engagement Agent 설정 (요구사항서 v2 + 승인 Q2~Q5 반영).
 환경변수 (GitHub Variables):
   FOLLOWING_ENABLED           — 'true'가 아니면 즉시 종료 (문서 34장 초기값 false)
   FOLLOWING_EXECUTION_MODE    — dry_run | shadow | live (불명 값 → dry_run 강등)
-  FOLLOWING_MAX_ACTIONS_PER_RUN / FOLLOWING_MAX_ACTIONS_PER_DAY — 상한 오버라이드
+  FOLLOWING_RUN_TARGET_MIN / FOLLOWING_RUN_TARGET_MAX — 실행별 무작위 후보 상한 범위
+  FOLLOWING_MAX_ACTIONS_PER_RUN / FOLLOWING_MAX_ACTIONS_PER_DAY — 절대 상한 오버라이드
 """
 
 from __future__ import annotations
 
 import os
+import random
 
 from reply_engine.config import env_int
 
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 
 # ── Decision 임계 (문서 13장, Q5 승인 초기값) ──
 MIN_RELEVANCE_SCORE: int = env_int("FOLLOWING_MIN_RELEVANCE", 85)
@@ -26,8 +28,13 @@ MIN_ENGAGEMENT_VALUE: int = env_int("FOLLOWING_MIN_ENGAGEMENT", 75)
 # 볼륨 보완의 안전 축 — R이 이 값 이상이면 near-miss 승격 대상.
 REVIEW_MIN_RELEVANCE: int = env_int("FOLLOWING_REVIEW_MIN_RELEVANCE", 75)
 
-MAX_ACTIONS_PER_RUN: int = env_int("FOLLOWING_MAX_ACTIONS_PER_RUN", 2)
-MAX_ACTIONS_PER_DAY: int = env_int("FOLLOWING_MAX_ACTIONS_PER_DAY", 5)
+MAX_ACTIONS_PER_RUN: int = env_int("FOLLOWING_MAX_ACTIONS_PER_RUN", 5)
+MAX_ACTIONS_PER_DAY: int = env_int("FOLLOWING_MAX_ACTIONS_PER_DAY", 24)
+
+# 한 시간마다 목표 수만 1~5에서 무작위로 정한다. 이는 발행 하한이 아니라 상한이다.
+# 품질 게이트를 통과한 글이 없으면 0건이 정상이며 절대 상한을 넘을 수 없다.
+RUN_TARGET_MIN: int = env_int("FOLLOWING_RUN_TARGET_MIN", 1)
+RUN_TARGET_MAX: int = env_int("FOLLOWING_RUN_TARGET_MAX", 5)
 
 AUTHOR_COOLDOWN_HOURS: int = env_int("FOLLOWING_AUTHOR_COOLDOWN_HOURS", 24)
 DUP_SIMILARITY_THRESHOLD: float = 0.85   # 생성 텍스트 중복 (문서 13장)
@@ -82,3 +89,15 @@ def get_trusted_author_ids() -> frozenset[str]:
     """LIVE 인용을 허용한 X 사용자 ID. 숫자 ID만 인정하며 빈 목록은 전건 차단한다."""
     raw = os.environ.get("FOLLOWING_TRUSTED_AUTHOR_IDS", "")
     return frozenset(value.strip() for value in raw.split(",") if value.strip().isdigit())
+
+
+def choose_run_target(rng: random.Random | random.SystemRandom | None = None) -> int:
+    """이번 실행의 후보 상한을 선택한다(설정 오류는 보수적으로 보정)."""
+    lower = max(1, min(5, RUN_TARGET_MIN))
+    upper = max(1, min(5, RUN_TARGET_MAX))
+    if lower > upper:
+        lower, upper = upper, lower
+    absolute_cap = max(0, min(5, MAX_ACTIONS_PER_RUN))
+    if absolute_cap == 0:
+        return 0
+    return min((rng or random.SystemRandom()).randint(lower, upper), absolute_cap)
