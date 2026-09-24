@@ -1,0 +1,38 @@
+# reply_summary.yml — P3: Reply Engine 실행 결과 요약을 repo에 커밋하는 후속 배치
+# 근거: Route-B 상세설계 §5 남은 결정 — artifact(14일 소멸)를 repo에 영속화해
+#       젠스파크 감시(WF-1)가 발행 수·skip 사유 분포를 자동 수집하게 한다.
+# 격리 원칙: 기존 파일 수정 0건 — 본 파일과 scripts/publish_summary.py 신규 2건만 추가.
+# 트리거: reply_engine.yml 완료 직후(workflow_run) — 엔진 코드·yml 무변경.
+name: reply-summary
+
+on:
+  workflow_run:
+    workflows: ["reply-engine"]
+    types: [completed]
+
+permissions:
+  contents: write      # 요약 파일 커밋·푸시
+  actions: read        # 엔진 실행 artifact 읽기
+
+concurrency:
+  group: reply-summary
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Build summary and commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_CREATED: ${{ github.event.workflow_run.created_at }}
+        run: python3 scripts/publish_summary.py
