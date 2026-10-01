@@ -1,11 +1,11 @@
 name: Reply Engine Operational Beta
 
-# Only an explicitly named approved merge changing this review record triggers beta.
+# Only an explicit approved marker plus a review/residual record change triggers beta.
 # No schedule. Repeating requires a new deliberate marker commit.
 on:
   push:
     branches: [main]
-    paths: ["docs/REPLY_ENGINE_V2_REVIEW.md"]
+    paths: ["docs/REPLY_ENGINE_V2_REVIEW.md", "docs/REPLY_ENGINE_V2_RESIDUAL.md"]
 
 permissions:
   contents: read
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    if: contains(github.event.head_commit.message, 'reply-engine-v2-approved-beta')
+    if: contains(github.event.head_commit.message, 'reply-engine-v2-approved-beta') || contains(github.event.head_commit.message, 'reply-engine-v2-residual-check')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,7 +26,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt pytest==9.1.1 ruff==0.16.10
-      - run: ruff check run_reply.py reply_engine core/gemini_gateway.py scripts/reply_operational_beta.py tests/test_reply_v2.py tests/test_reply_review_safety.py tests/test_reply_review_quality.py tests/test_reply_sdk_integration.py tests/test_reply_beta.py
+      - run: ruff check run_reply.py reply_engine core/gemini_gateway.py scripts/reply_operational_beta.py scripts/reply_quality_replay.py tests/test_reply_v2.py tests/test_reply_review_safety.py tests/test_reply_review_quality.py tests/test_reply_sdk_integration.py tests/test_reply_beta.py tests/test_reply_quality_replay.py tests/test_check_reply_db.py
       - run: python -m pytest -q tests/
 
   beta:
@@ -42,6 +42,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Approved dry-run and one-reply live beta
         env:
+          RESIDUAL_CHECK: ${{ contains(github.event.head_commit.message, 'reply-engine-v2-residual-check') }}
           # X (Twitter) OAuth 1.0a
           X_API_KEY:              ${{ secrets.X_API_KEY }}
           X_API_SECRET:           ${{ secrets.X_API_SECRET }}
@@ -87,7 +88,11 @@ jobs:
           TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
 
-        run: python -m scripts.reply_operational_beta
+        run: |
+          if [[ "$RESIDUAL_CHECK" == "true" ]]; then
+            python -m scripts.reply_quality_replay
+          fi
+          python -m scripts.reply_operational_beta
       - name: Upload beta reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -95,6 +100,7 @@ jobs:
           name: reply-beta-${{ github.run_id }}
           path: |
             logs/reply_beta_report.json
+            logs/reply_quality_replay.json
             logs/reply_report_*.json
             logs/reply_db_audit.json
             logs/reply_*.log

@@ -20,7 +20,7 @@ REQUIRED_TABLE_CONTRACTS = {
 }
 
 OPTIONAL_TABLE_CONTRACTS = {
-    "kr_reply_likes": "reply_tweet_id,author_id,mode,would_like,created_at",
+    "kr_reply_likes": "reply_tweet_id,author_id,mode,would_like,created_at,liked_at",
 }
 
 

@@ -118,6 +118,8 @@ class OfflineServices:
             if self.timeout:
                 raise requests.Timeout("transport timeout")
             payload = {"data": {"id": str(900 + self.post_count), "text": kwargs["json"]["text"]}}
+        elif route == "/2/users/me":
+            payload = {"data": {"id": "111", "name": "Operator", "username": "operator"}}
         elif route.endswith("/mentions"):
             since = kwargs.get("params", {}).get("since_id")
             mentions = [m for m in self.mentions if not since or int(m["id"]) > int(since)]
@@ -142,6 +144,7 @@ class OfflineServices:
                 )
         else:
             ids = kwargs["params"]["ids"].split(",")
+            comments = [mention for mention in self.mentions if mention["id"] in ids]
             payload = {
                 "data": [
                     {
@@ -153,6 +156,20 @@ class OfflineServices:
                     for tid in ids
                 ]
             }
+            if comments:
+                payload = {
+                    "data": comments,
+                    "includes": {
+                        "tweets": [
+                            {
+                                "id": "400",
+                                "edit_history_tweet_ids": ["400"],
+                                "text": "시장 정보 원문",
+                                "author_id": "111",
+                            }
+                        ]
+                    },
+                }
         response = requests.Response()
         response.status_code = 200
         response._content = json.dumps(payload).encode()
@@ -331,3 +348,27 @@ def test_real_pipeline_fresh_rescans_preserve_classifier_failure_limit(services)
     exhausted = run_reply.main()
     assert exhausted["skip_reasons"]["DUP"] == 1
     assert len(services.model_requests) == 3
+
+
+def test_real_sdk_historical_quality_replay_only_mutates_budget(services):
+    from scripts import reply_quality_replay
+
+    services.add_mention("500")
+    assert run_reply.main()["actual_published"] == 1
+    history = deepcopy(services.tables["kr_reply_history"])
+    cursors = deepcopy(services.tables["kr_reply_cursor"])
+    request_offset = len(services.db_requests)
+    x_offset = len(services.x_requests)
+    result = reply_quality_replay.main()
+    assert result["success"] and result["verified"] == 1 and result["generated"] == 1
+    assert result["review"][0]["context_verified"]
+    assert result["review"][0]["parent_text"] == "시장 정보 원문"
+    assert result["review"][0]["result"] == "SIMULATED_PASS"
+    assert result["budget"]["run_delta"]["read_calls"] == 3
+    assert services.tables["kr_reply_history"] == history
+    assert services.tables["kr_reply_cursor"] == cursors
+    assert all(method == "GET" for method, _, _ in services.x_requests[x_offset:])
+    mutations = [
+        request for request in services.db_requests[request_offset:] if request.method != "GET"
+    ]
+    assert mutations and all(request.url.path.endswith("/kr_reply_budget") for request in mutations)

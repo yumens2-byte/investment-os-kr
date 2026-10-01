@@ -2,7 +2,23 @@ from __future__ import annotations
 
 import json
 
+from reply_engine import db_audit
 from scripts import check_reply_db
+
+
+def test_live_like_timestamp_is_required_by_optional_contract(monkeypatch):
+    def sample(table, columns, _limit):
+        if table == "kr_reply_likes" and "liked_at" in columns.split(","):
+            raise RuntimeError("liked_at missing")
+        return []
+
+    monkeypatch.setattr(db_audit, "_sample", sample)
+    optional = db_audit.audit_reply_db()
+    assert optional["healthy"]
+    assert optional["optional_schema_errors"] == {"kr_reply_likes": "RuntimeError"}
+    required = db_audit.audit_reply_db(require_likes=True)
+    assert not required["healthy"]
+    assert required["schema_errors"] == {"kr_reply_likes": "RuntimeError"}
 
 
 def test_main_writes_report_summary_and_success_exit(monkeypatch, tmp_path):
