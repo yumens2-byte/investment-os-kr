@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   test:
-    if: contains(github.event.head_commit.message, 'reply-engine-v2-approved-beta') || contains(github.event.head_commit.message, 'reply-engine-v2-residual-check')
+    if: contains(github.event.head_commit.message, 'reply-engine-v2-approved-beta') || contains(github.event.head_commit.message, 'reply-engine-v2-residual-check') || contains(github.event.head_commit.message, 'reply-engine-v2-schema-probe')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,7 +26,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt pytest==9.1.1 ruff==0.16.10
-      - run: ruff check run_reply.py reply_engine core/gemini_gateway.py scripts/reply_operational_beta.py scripts/reply_quality_replay.py tests/test_reply_v2.py tests/test_reply_review_safety.py tests/test_reply_review_quality.py tests/test_reply_sdk_integration.py tests/test_reply_beta.py tests/test_reply_quality_replay.py tests/test_check_reply_db.py
+      - run: ruff check run_reply.py reply_engine core/gemini_gateway.py scripts/reply_operational_beta.py scripts/reply_quality_replay.py tests/test_reply_v2.py tests/test_reply_review_safety.py tests/test_reply_review_quality.py tests/test_reply_sdk_integration.py tests/test_reply_beta.py tests/test_reply_quality_replay.py tests/test_check_reply_db.py tests/test_reply_db_audit_codes.py scripts/check_reply_db.py
       - run: python -m pytest -q tests/
 
   beta:
@@ -43,6 +43,8 @@ jobs:
       - name: Approved dry-run and one-reply live beta
         env:
           RESIDUAL_CHECK: ${{ contains(github.event.head_commit.message, 'reply-engine-v2-residual-check') }}
+          SCHEMA_PROBE: ${{ contains(github.event.head_commit.message, 'reply-engine-v2-schema-probe') }}
+          REPLY_EXPECTED_DB_REF: "ccomoimhhttaklfadaos"
           # X (Twitter) OAuth 1.0a
           X_API_KEY:              ${{ secrets.X_API_KEY }}
           X_API_SECRET:           ${{ secrets.X_API_SECRET }}
@@ -89,10 +91,14 @@ jobs:
           TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
 
         run: |
-          if [[ "$RESIDUAL_CHECK" == "true" ]]; then
-            python -m scripts.reply_quality_replay
+          if [[ "$SCHEMA_PROBE" == "true" ]]; then
+            REPLY_LIKE_ENABLED=true python -m scripts.check_reply_db
+          else
+            if [[ "$RESIDUAL_CHECK" == "true" ]]; then
+              python -m scripts.reply_quality_replay
+            fi
+            python -m scripts.reply_operational_beta
           fi
-          python -m scripts.reply_operational_beta
       - name: Upload beta reports
         if: always()
         uses: actions/upload-artifact@v4

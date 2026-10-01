@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 
 from reply_engine import db_audit
@@ -61,3 +62,66 @@ def test_main_returns_failure_for_unhealthy_report(monkeypatch, tmp_path):
     )
 
     assert check_reply_db.main() == 1
+
+
+def test_connection_diagnostics_allowlist_jwt_role_and_never_emit_claims(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    claims = {"role": "anon", "ref": "privateproject", "email": "hidden@example.test"}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    key = f"privateheader.{payload}.privatesignature"
+    monkeypatch.setenv("SUPABASE_URL", "https://privateproject.supabase.co")
+    monkeypatch.setenv("REPLY_EXPECTED_DB_REF", "privateproject")
+    monkeypatch.setenv("SUPABASE_KEY", key)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(
+        check_reply_db,
+        "audit_reply_db",
+        lambda **_kw: {
+            "healthy": False,
+            "rows_checked": 0,
+            "truncated": False,
+            "issues": {},
+            "schema_errors": {"kr_reply_likes": "APIError"},
+            "schema_error_codes": {"kr_reply_likes": "42501"},
+        },
+    )
+    assert check_reply_db.main() == 1
+    saved = (tmp_path / "logs/reply_db_audit.json").read_text()
+    printed = capsys.readouterr().out
+    assert json.loads(saved)["connection_context"] == {
+        "expected_project_matches": True,
+        "key_kind": "jwt",
+        "declared_role": "anon",
+    }
+    for secret in (key, payload, "privateproject", "privatesignature", "hidden@example.test"):
+        assert secret not in saved and secret not in printed
+
+
+def test_connection_diagnostics_handle_opaque_keys_and_project_mismatch(monkeypatch):
+    monkeypatch.setenv("REPLY_EXPECTED_DB_REF", "expectedproject")
+    monkeypatch.setenv("SUPABASE_URL", "https://otherproject.supabase.co")
+    for key, kind in (("sb_publishable_private", "publishable"), ("sb_secret_private", "secret")):
+        monkeypatch.setenv("SUPABASE_KEY", key)
+        assert check_reply_db.connection_context() == {
+            "expected_project_matches": False,
+            "key_kind": kind,
+            "declared_role": "unknown",
+        }
+
+
+def test_connection_diagnostics_malformed_or_unrecognized_claims_are_safe(monkeypatch):
+    monkeypatch.delenv("REPLY_EXPECTED_DB_REF", raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "https://[invalid")
+    monkeypatch.setenv("SUPABASE_KEY", "bad.%%%invalid%%%.signature")
+    assert check_reply_db.connection_context() == {
+        "expected_project_matches": None,
+        "key_kind": "unknown",
+        "declared_role": "unknown",
+    }
+    payload = base64.urlsafe_b64encode(json.dumps({"role": "secret-role-name"}).encode()).decode()
+    monkeypatch.setenv("SUPABASE_KEY", f"header.{payload}.signature")
+    context = check_reply_db.connection_context()
+    assert context["key_kind"] == "jwt" and context["declared_role"] == "other"
+    assert "secret-role-name" not in json.dumps(context)

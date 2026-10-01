@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -59,6 +60,8 @@ def audit_reply_db(
         "healthy": True,
         "schema_errors": {},
         "optional_schema_errors": {},
+        "schema_error_codes": {},
+        "optional_schema_error_codes": {},
         "rows_checked": 0,
         "issues": {},
         "samples": {},
@@ -77,6 +80,12 @@ def audit_reply_db(
             is_required = table in REQUIRED_TABLE_CONTRACTS or require_likes
             error_bucket = "schema_errors" if is_required else "optional_schema_errors"
             report[error_bucket][table] = type(exc).__name__
+            # SQLSTATE/PostgREST codes identify permissions, missing columns and
+            # stale schema cache without exposing exception URLs or credentials.
+            code = str(getattr(exc, "code", ""))
+            if re.fullmatch(r"(?:[0-9A-Z]{5}|PGRST[0-9]{3})", code):
+                code_bucket = "schema_error_codes" if is_required else "optional_schema_error_codes"
+                report[code_bucket][table] = code
             if is_required:
                 report["healthy"] = False
 

@@ -61,3 +61,9 @@ main 병합·운영 변수 변경·DB 쓰기·실제 X 답글 발행은 수행�
 후속 독립 리뷰에서 발견된 문제를 수정한 최종 전체 테스트는 640건 통과(로컬 13.64초, GitHub PR CI 14.80초)했다. 실제 SDK 오프라인 통합 6건이 포함된다. PR #22를 main에 반영하고 운영 베타를 수행했다.
 
 운영 베타는 성공했으나 신규 멘션 0건으로 실제 발행 검증은 남아 있다. 이후 결과는 [REPLY_ENGINE_V2_BETA_RESULT.md](REPLY_ENGINE_V2_BETA_RESULT.md), 리뷰 원인과 수정은 [REPLY_ENGINE_V2_REVIEW.md](REPLY_ENGINE_V2_REVIEW.md)를 따른다. 위 문서의 초기 569건 결과와 미반영 문구는 최초 개발 검증 시점의 기록이다.
+
+## 잔여 작업 재검증
+
+실제 댓글 재생·DB 좋아요 계약 검사를 추가한 전체 테스트는 655건 통과했다(로컬 13.93초, GitHub 15.05초). 실제 SDK 통합 7건, 품질 재생 13건, `liked_at` 누락 계약 회귀 1건을 포함한다. Ruff·diff 검사와 독립 AI 리뷰 3개를 통과했다.
+
+[운영 후속 실행](https://github.com/yumens2-byte/investment-os-kr/actions/runs/36929310707)의 테스트 게이트가 이를 재검증했다. 실제 원문 재생·운영 DB 보완 결과는 [REPLY_ENGINE_V2_RESIDUAL.md](REPLY_ENGINE_V2_RESIDUAL.md)에 기록한다.
