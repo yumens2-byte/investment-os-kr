@@ -36,6 +36,14 @@ _NON_KR_PATTERN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u0400-\u04ff\u0e00-\u
 
 _FORMAT_PATTERN = re.compile(r"#|https?://|t\.co/|@\w+", re.IGNORECASE)
 
+# Count rendered sequences, including skin tones, ZWJ and paired flag indicators.
+_EMOJI_BASE = r"[\U0001F000-\U0001F3FA\U0001F400-\U0001FAFF\u2600-\u27BF]"
+_EMOJI_UNIT = _EMOJI_BASE + r"[\ufe0e\ufe0f]?[\U0001F3FB-\U0001F3FF]?"
+_EMOJI_PATTERN = re.compile(
+    r"[\U0001F1E6-\U0001F1FF]{2}|[0-9#*]\ufe0f?\u20e3|"
+    + _EMOJI_UNIT + r"(?:\u200d" + _EMOJI_UNIT + r")*"
+)
+
 # C-2 (2026-08-17): 지시형/안내형 표현 감지 — "감사·호응만" 정책 위반 차단.
 # dry_run 2차에서 '네, 바로 확인해 보세요!' 통과 사고 재발 방지.
 # 인사 관용구("좋은 하루 되세요", "~보내세요")는 매칭되지 않도록 패턴 한정.
@@ -115,7 +123,7 @@ def check_reply(
     if len(text) > REPLY_MAX_LENGTH:
         return False, "GATE_LENGTH"
 
-    emoji_count = sum(0x1F000 <= ord(ch) <= 0x1FAFF or 0x2600 <= ord(ch) <= 0x27BF for ch in text)
+    emoji_count = len(_EMOJI_PATTERN.findall(text))
     if emoji_count > 1:
         return False, "GATE_EMOJI"
     if "\n" in text or "\r" in text:

@@ -190,7 +190,10 @@ def claim_publication(reply_tweet_id: str, metadata: str) -> str | None:
         metadata = json.dumps(current, ensure_ascii=False)
         result = (
             client.table(_T_HISTORY)
-            .update({"skip_reason": "PUBLISHING", "error_message": metadata})
+            .update({
+                "skip_reason": "PUBLISHING", "error_message": metadata,
+                "created_at": datetime.now(UTC).isoformat(),
+            })
             .eq("reply_tweet_id", reply_tweet_id)
             .eq("mode", "live")
             .eq("responded", False)
@@ -328,6 +331,7 @@ def get_history_metrics(days: int = 7) -> dict:
 def get_retryable_history(limit: int = 10) -> list[dict]:
     """Bounded oldest-first recovery of deferred decisions, never unknown publications."""
     try:
+        limit = max(1, min(100, limit))
         result = (
             get_client()
             .table(_T_HISTORY)
@@ -338,7 +342,7 @@ def get_retryable_history(limit: int = 10) -> list[dict]:
             .in_("skip_reason", sorted(DEFER_REASONS))
             .gte("created_at", _retry_cutoff_iso())
             .order("created_at")
-            .limit(max(1, min(100, limit)))
+            .limit(min(500, limit * 5))
             .execute()
         )
         rows = []
@@ -366,6 +370,8 @@ def get_retryable_history(limit: int = 10) -> list[dict]:
             except (TypeError, ValueError):
                 continue
             rows.append(row)
+            if len(rows) >= limit:
+                break
         return rows
     except Exception as exc:
         logger.warning("[Store] recovery lookup failed: %s", exc)
@@ -386,14 +392,23 @@ def _chunks(items: list[str], size: int = _IN_CHUNK_SIZE):
         yield items[i : i + size]
 
 
+class HistoryLookup(set):
+    """Blocked IDs plus rows from the same query, for retry metadata hydration."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = {}
+
+
 def history_exists_bulk(reply_tweet_ids: list[str]) -> set[str]:
     ids = [i for i in dict.fromkeys(reply_tweet_ids) if i]
-    found = set()
+    found = HistoryLookup()
     try:
         for chunk in _chunks(ids):
             rows = (
                 get_client().table(_T_HISTORY).select("*").in_("reply_tweet_id", chunk).execute()
             ).data or []
+            found.rows.update({row["reply_tweet_id"]: row for row in rows})
             found.update(row["reply_tweet_id"] for row in rows if _blocked_row(row))
     except Exception as exc:
         logger.error("[Store] duplicate lookup failed: %s", exc)
@@ -518,6 +533,7 @@ def get_budget(budget_date: str) -> dict:
             return result.data[0]
     except Exception as exc:
         logger.error(f"[Store] get_budget 실패: {exc}")
+        raise RuntimeError("Daily API budget could not be loaded") from exc
     return {
         "budget_date": budget_date,
         "read_calls": 0,

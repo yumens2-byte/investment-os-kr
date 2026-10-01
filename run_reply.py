@@ -213,7 +213,13 @@ def main() -> dict:
 
     # ── Step 1: 예산 ──────────────────────────────────────────
     today = store.kst_today()
-    guard = budget_mod.BudgetGuard(store.get_budget(today))
+    try:
+        guard = budget_mod.BudgetGuard(store.get_budget(today))
+    except Exception as exc:
+        logger.error("[Step1] 예산 확인 실패 — 외부 호출 중단: %s", exc)
+        summary["exit_reason"] = "EXIT_BUDGET_UNAVAILABLE"
+        _write_report(summary)
+        return summary
     summary["history_metrics"] = store.get_history_metrics(days=7)
     if not guard.can_read():
         summary["exit_reason"] = "EXIT_BUDGET"
@@ -386,13 +392,15 @@ def main() -> dict:
         _write_report(summary, guard)
         return summary
 
-    current_ids = {tweet["id"] for tweet in tweets}
+    current_tweets = {tweet["id"]: tweet for tweet in tweets}
+    current_ids = set(current_tweets)
     for row in retry_rows:
         meta = decode_metadata(row.get("error_message"))
         if meta.get("account_user_id") != my_user_id:
             continue
         tid = str(row["reply_tweet_id"])
         if tid in current_ids:
+            current_tweets[tid]["_metadata"] = meta
             continue
         tweets.append(
             {
@@ -459,7 +467,13 @@ def main() -> dict:
     # R-5: 정적 필터를 먼저 통과시킨 뒤 배치 스냅샷을 1회 구성 (DB 3쿼리 고정).
     # 기존에는 후보 N건 × 3쿼리 순차 실행이었다.
     static_ok: list[dict] = []
+    existing_ids = store.history_exists_bulk([tweet["id"] for tweet in tweets])
     for tweet in tweets:
+        # Already durable publication states take precedence over expiry/spam changes.
+        # Attempting to replace them with a fresh skip would fail CAS and stall the cursor.
+        if tweet["id"] in existing_ids:
+            _record_skip(tweet, "DUP")
+            continue
         passed, reason = filter_mod.check_tweet(
             tweet, users.get(tweet["author_id"]), my_user_id, blacklist
         )
@@ -468,7 +482,7 @@ def main() -> dict:
             continue
         static_ok.append(tweet)
 
-    cap_ctx = filter_mod.build_cap_context(static_ok) if static_ok else None
+    cap_ctx = filter_mod.build_cap_context(static_ok, existing_ids) if static_ok else None
 
     # 이 단계는 중복만 확인한다. 슬롯 예약은 게이트 통과 후 수행한다.
     candidates: list[dict] = []
@@ -477,6 +491,10 @@ def main() -> dict:
         if not passed:
             _record_skip(tweet, reason)
             continue
+        previous = cap_ctx.history_rows.get(tweet["id"], {})
+        metadata = decode_metadata(previous.get("error_message"))
+        if metadata:
+            tweet["_metadata"] = metadata
         candidates.append(tweet)
 
     logger.info(f"[Step3] 필터 통과 {len(candidates)}건")
@@ -571,38 +589,33 @@ def main() -> dict:
 
     # ── Step 5: 생성 ──────────────────────────────────────────
     replies: dict[str, str] = {}
-    if pass_items:
-        # R-9: 외국어 건은 generator가 정형 문구로 처리하므로 Gemini 호출 대상이 아니다.
-        #      AI 대상이 0건이면 실제 호출이 없으므로 예산도 계상하지 않는다.
-        non_kr_ids = [t["id"] for t in pass_items if lang.is_non_korean(t["text"])]
-        summary["non_kr_replies"] = len(non_kr_ids)
+    reply_sources: dict[str, str] = {}
+    generated_ids: set[str] = set()
+    summary["non_kr_replies"] = sum(lang.is_non_korean(t["text"]) for t in pass_items)
 
-        replies = generator.generate_batch(
-            [
-                {
-                    "id": t["id"],
-                    "text": t["text"],
-                    "label": t["label"],
-                    "parent_text": t.get("parent_text", ""),
-                    "parent_author_id": t.get("parent_author_id", ""),
-                    "root_author_id": t.get("root_author_id", ""),
-                    "foreign_thread": bool(t.get("foreign_thread")),
-                }
-                for t in pass_items
-            ]
-        )
-        for _ in range(getattr(replies, "api_calls", 0)):
+    def generate_window(index: int, capacity: int) -> None:
+        # Generate only a bounded window that can fit the remaining publication slots.
+        window = [t for t in pass_items[index:index + capacity] if t["id"] not in generated_ids]
+        if not window:
+            return
+        batch = generator.generate_batch(window)
+        replies.update(batch)
+        reply_sources.update(getattr(batch, "sources", {}))
+        generated_ids.update(t["id"] for t in window)
+        for _ in range(getattr(batch, "api_calls", 0)):
             guard.record_gemini()
-        summary["model_usage"].extend(getattr(replies, "usage", []))
-        for tweet in pass_items:
-            if tweet.get("_retry") and tweet.get("_stored_response_text"):
-                replies[tweet["id"]] = tweet["_stored_response_text"]
+        summary["model_usage"].extend(getattr(batch, "usage", []))
+        for item in window:
+            if item.get("_retry") and item.get("_stored_response_text"):
+                replies[item["id"]] = item["_stored_response_text"]
 
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
     responded_today = store.count_responded_today()
     published_this_run = 0
     publish_attempts_this_run = 0
+    quota_used_this_run = 0
+    foreign_reserved_this_run = 0
     # R-2: 실발행 기준 2차 캡. Step3 승인 시점에 이미 상한이 걸리지만,
     # 게이트 탈락·발행 실패로 승인≠발행이 되는 경로가 있어 심층 방어로 재계수한다.
     published_author_run: dict[str, int] = {}
@@ -628,15 +641,29 @@ def main() -> dict:
         skip_reason: str | None = None
         if max(published_this_run, publish_attempts_this_run) >= REPLY_RUN_CAP:
             skip_reason = "RUN_CAP"
-        elif responded_today + published_this_run >= REPLY_DAILY_CAP:
+        elif responded_today + quota_used_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
-        elif tweet.get("foreign_thread") and foreign_published >= REPLY_FOREIGN_THREAD_RUN_CAP:
+        elif (tweet.get("foreign_thread")
+              and foreign_reserved_this_run >= REPLY_FOREIGN_THREAD_RUN_CAP):
             skip_reason = "FOREIGN_THREAD_CAP"
         elif published_author_run.get(author_id, 0) >= REPLY_AUTHOR_DAILY_CAP:
             skip_reason = "AUTHOR_CAP_RUN"  # R-2 2차 방어선
         elif published_conv_run.get(conversation_id, 0) >= REPLY_CONV_DAILY_CAP:
             skip_reason = "CONV_CAP_RUN"  # R-2 2차 방어선
+        elif mode == "live" and not guard.can_write():
+            skip_reason = "BUDGET_WRITE"
         else:
+            if tweet_id not in generated_ids:
+                capacity = max(1, min(
+                    REPLY_RUN_CAP - max(published_this_run, publish_attempts_this_run),
+                    REPLY_DAILY_CAP - responded_today - quota_used_this_run,
+                ))
+                generate_window(idx, capacity)
+            reply_text = (replies.get(tweet_id) or "").strip()
+            if not tweet.get("_retry"):
+                response_source = reply_sources.get(
+                    tweet_id, "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
+                )
             gate_ok, gate_reason = gate.check_reply(
                 reply_text, recent_texts, comment_text=tweet["text"]
             )
@@ -719,6 +746,8 @@ def main() -> dict:
             review_entry["result"] = "SIMULATED"
             recent_texts.append(reply_text)
             published_this_run += 1
+            quota_used_this_run += 1
+            foreign_reserved_this_run += int(bool(tweet.get("foreign_thread")))
             foreign_published += int(bool(tweet.get("foreign_thread")))
             # R-2: shadow에서도 캡이 실동작해야 검수가 유효하다
             published_author_run[author_id] = published_author_run.get(author_id, 0) + 1
@@ -745,6 +774,9 @@ def main() -> dict:
             logger.info(f"[Step7] 첫 발행 부하 분산 딜레이 {delay}초 대기")
             time.sleep(delay)
 
+        # live: 결과 불명도 quota를 점유한다. 명시적 거절일 때만 반환한다.
+        quota_used_this_run += 1
+        foreign_reserved_this_run += int(bool(tweet.get("foreign_thread")))
         # live: 발행 → 즉시 기록 (발행-기록 짝)
         # 테스트/외부 사용처가 레거시 post_reply를 교체할 수 있어 해당 경우에는
         # 기존 호출 규약을 유지하고, 실제 클라이언트 경로에서는 오류 원문도 받는다.
@@ -778,7 +810,10 @@ def main() -> dict:
             published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
         else:
             failure = classify_publish_error(publish_error)
+            confirmed_rejection = failure in {"PUBLISH_RETRYABLE", "PUBLISH_REJECTED", "SPEND_CAP"}
             error_meta = decode_metadata(metadata)
+            if failure == "PUBLISH_RETRYABLE" and int(error_meta.get("publish_attempts", 0)) >= 3:
+                failure = "PUBLISH_EXHAUSTED"
             error_meta["platform_error"] = str(publish_error or "")[:1000]
             if not store.update_skip_reason(
                 tweet_id, failure, json.dumps(error_meta, ensure_ascii=False)
@@ -788,8 +823,10 @@ def main() -> dict:
             _skip(tweet_id, failure)
             summary["deferred"] += int(failure in DEFER_REASONS)
             # Confirmed non-publication returns the in-run reservation.
-            if failure in {"PUBLISH_RETRYABLE", "PUBLISH_REJECTED", "SPEND_CAP"}:
+            if confirmed_rejection:
                 filter_mod.release_admission(tweet, cap_ctx)
+                quota_used_this_run -= 1
+                foreign_reserved_this_run -= int(bool(tweet.get("foreign_thread")))
 
         # 발행 간 지터 (마지막 건 제외)
         if idx < len(pass_items) - 1 and published_this_run < REPLY_RUN_CAP:
@@ -804,7 +841,8 @@ def main() -> dict:
     failures = {
         key: value
         for key, value in summary["skip_reasons"].items()
-        if key in {"PUBLISH_UNKNOWN", "PUBLISH_RETRYABLE", "PUBLISH_REJECTED", "SPEND_CAP"}
+        if key in {"PUBLISH_UNKNOWN", "PUBLISH_RETRYABLE", "PUBLISH_REJECTED",
+                   "PUBLISH_EXHAUSTED", "SPEND_CAP"}
         and value
     }
     if failures:
@@ -839,5 +877,7 @@ def main() -> dict:
 if __name__ == "__main__":
     result = main()
     # 파이프라인 자체 실패(수집 불가 등)만 비정상 종료. 발행 0건은 정상.
-    fail_reasons = {"EXIT_NO_CREDENTIALS", "EXIT_GET_ME_FAIL", "EXIT_FETCH_FAIL"}
+    fail_reasons = {
+        "EXIT_NO_CREDENTIALS", "EXIT_GET_ME_FAIL", "EXIT_FETCH_FAIL", "EXIT_BUDGET_UNAVAILABLE"
+    }
     sys.exit(1 if result.get("exit_reason") in fail_reasons else 0)

@@ -22,7 +22,10 @@ DEFER_REASONS = frozenset(
         "PUBLISH_RETRYABLE",
     }
 )
-BLOCKED_STATES = frozenset({"PUBLISHING", "PUBLISH_UNKNOWN", "DB_CONFIRM_FAIL"})
+BLOCKED_STATES = frozenset(
+    {"PUBLISHING", "PUBLISH_UNKNOWN", "DB_CONFIRM_FAIL", "PUBLISH_FAIL",
+     "PUBLISH_REJECTED", "PUBLISH_EXHAUSTED", "SPEND_CAP"}
+)
 REACTION_PATTERN = re.compile(r"^(?:[👍🙏❤🔥💯👏🙌😊😄😆🙂❤️]|[\ufe0f\u200d]|[!~. ])+$")
 SAFE_POOLS = {
     "THANKS": (
@@ -71,7 +74,10 @@ def intent_for(text: str, label: str) -> str:
         return "LAUGH"
     if any(word in body for word in ("감사", "고맙", "고마워")):
         return "THANKS"
-    if label == "POSITIVE" and any(word in body for word in ("잘 봤", "잘봤", "유익", "멋", "좋")):
+    if label == "POSITIVE" and (
+        any(word in body for word in ("잘 봤", "잘봤", "유익"))
+        or re.search(r"(?:자료|정리|글|설명|분석|콘텐츠).*(?:좋|멋)", body)
+    ):
         return "PRAISE"
     # Never infer agreement with a market prediction from an ambiguous reaction.
     return "ACK"

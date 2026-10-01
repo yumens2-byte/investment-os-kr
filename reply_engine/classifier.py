@@ -114,6 +114,7 @@ def classify_by_rule(text: str) -> str | None:
     # Mixed sentiment, negation and rhetorical questions need parent context.
     if has_positive and (
         has_negative
+        or re.search(r"않|아니|없|못|(?:^|\s)안(?:\s|[가-힣])|마세요|말아|필요\s*없", body)
         or (_INTERROGATIVE_PATTERN.search(body) and not _QUESTION_MARK_PATTERN.search(body))
     ):
         return None

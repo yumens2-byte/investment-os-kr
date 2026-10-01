@@ -152,6 +152,7 @@ class CapContext:
     """
 
     existing_ids: set[str] = field(default_factory=set)
+    history_rows: dict[str, dict] = field(default_factory=dict)
     author_today: dict[str, int] = field(default_factory=dict)
     conv_today: dict[str, int] = field(default_factory=dict)
     author_run: dict[str, int] = field(default_factory=dict)
@@ -159,7 +160,7 @@ class CapContext:
     bulk_ready: bool = False
 
 
-def build_cap_context(tweets: list[dict]) -> CapContext:
+def build_cap_context(tweets: list[dict], existing_ids: set[str] | None = None) -> CapContext:
     """
     후보 트윗 목록으로 배치 스냅샷을 1회 구성한다 (DB 3쿼리 고정, R-5).
     정적 필터 통과 건에만 호출해 조회 대상을 최소화한다.
@@ -167,8 +168,10 @@ def build_cap_context(tweets: list[dict]) -> CapContext:
     ids = [t.get("id", "") for t in tweets]
     authors = [t.get("author_id", "") for t in tweets]
     convs = [t.get("conversation_id", "") for t in tweets]
+    existing = existing_ids if existing_ids is not None else store.history_exists_bulk(ids)
     return CapContext(
-        existing_ids=store.history_exists_bulk(ids),
+        existing_ids=existing,
+        history_rows=getattr(existing, "rows", {}),
         author_today=store.count_author_responded_today_bulk(authors),
         conv_today=store.count_conversation_responded_today_bulk(convs),
         bulk_ready=True,
