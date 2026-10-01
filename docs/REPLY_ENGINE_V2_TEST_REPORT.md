@@ -55,3 +55,9 @@ main 병합·운영 변수 변경·DB 쓰기·실제 X 답글 발행은 수행�
 타인 스레드 및 링크 검토는 기본 비활성이다. 질문 자동답변·정정·새 계정 휴리스틱 해제는 후속 응답 범위로 남긴다. 기존 PUBLISH_FAIL과 새 UNKNOWN/PUBLISHING은 실발행 여부를 확인한 뒤 운영자가 처리해야 한다.
 
 구체적인 처리 계약과 운영 절차는 [REPLY_ENGINE_V2.md](REPLY_ENGINE_V2.md)를 따른다.
+
+## 후속 3인 리뷰·통합 검증·운영 반영
+
+후속 독립 리뷰에서 발견된 문제를 수정한 최종 전체 테스트는 640건 통과(로컬 13.64초, GitHub PR CI 14.80초)했다. 실제 SDK 오프라인 통합 6건이 포함된다. PR #22를 main에 반영하고 운영 베타를 수행했다.
+
+운영 베타는 성공했으나 신규 멘션 0건으로 실제 발행 검증은 남아 있다. 이후 결과는 [REPLY_ENGINE_V2_BETA_RESULT.md](REPLY_ENGINE_V2_BETA_RESULT.md), 리뷰 원인과 수정은 [REPLY_ENGINE_V2_REVIEW.md](REPLY_ENGINE_V2_REVIEW.md)를 따른다. 위 문서의 초기 569건 결과와 미반영 문구는 최초 개발 검증 시점의 기록이다.
