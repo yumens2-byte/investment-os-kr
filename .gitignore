@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local reply test/runtime reports (uploaded separately by Actions).
+logs/

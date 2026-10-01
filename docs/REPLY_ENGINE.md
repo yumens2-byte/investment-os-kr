@@ -1,3 +1,11 @@
+# X Reply Engine 운영 가이드
+
+현재 운영 계약은 [자동댓글 v2 개발·운영 계약](REPLY_ENGINE_V2.md), 검증 결과는 [v2 테스트 결과](REPLY_ENGINE_V2_TEST_REPORT.md)를 참고합니다.
+
+아래는 v1.8.0의 과거 검토 기록입니다. 재처리·shadow 커서·발행 상태 계약은 v2 문서를 우선합니다.
+
+---
+
 # X Reply Engine 운영·설계 가이드 (v1.8.0)
 
 마지막 검토: **2026-09-15**

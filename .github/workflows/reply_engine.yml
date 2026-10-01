@@ -1,7 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
-# v1.5.0 (2026-09-16)
+# v2.0.0 (2026-10-02)
 # ──────────────────────────────────────────────────────────────
 # 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
 #
@@ -153,6 +153,7 @@ jobs:
           REPLY_MENTIONS_MAX_PAGES: ${{ vars.REPLY_MENTIONS_MAX_PAGES }}
           REPLY_CURSOR_STALE_WARN_HOURS: ${{ vars.REPLY_CURSOR_STALE_WARN_HOURS }}
           # 타인 원글 스레드 응답은 명시적 opt-in. 미등록/false이면 코드 기본 차단.
+          REPLY_LINK_REVIEW_ENABLED: ${{ vars.REPLY_LINK_REVIEW_ENABLED }}
           REPLY_FOREIGN_THREAD_ENABLED: ${{ vars.REPLY_FOREIGN_THREAD_ENABLED }}
           REPLY_FOREIGN_THREAD_RUN_CAP: ${{ vars.REPLY_FOREIGN_THREAD_RUN_CAP }}
           REPLY_PUBLISH_DELAY_MAX_SEC: ${{ vars.REPLY_PUBLISH_DELAY_MAX_SEC }}

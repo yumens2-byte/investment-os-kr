@@ -28,12 +28,12 @@ def test_g1_prompt_contains_domain_context(monkeypatch):
     prompt = captured["prompt"]
 
     for required in (
-        "돈복사", "슈드", "종목 애칭",          # 도메인 컨텍스트
-        "시장·종목에 대한 관찰/환호",            # 방향 분기 [B]
-        "같은 마음입니다",                       # 공감 인사 방향
-        "의도 오독",                             # 실측 사례 1 (돈복사)
-        "하지 않은 행동에 감사",                 # 실측 사례 2 (슈드) + 라벨 규칙
-        "불확실하면 라벨 없이",                  # 의도 라벨 접두 제한
+        "돈복사", "슈드", "시장 반응",          # 도메인 컨텍스트
+        "시장 관찰/환호",            # 방향 분기 [B]
+        "매매 방향을 지지하지",                       # 공감 인사 방향
+        "댓글에 명시된 상황",                             # 실측 사례 1 (돈복사)
+        "의도를 단정하지",                 # 실측 사례 2 (슈드) + 라벨 규칙
+        "의미를 알 수 없으면",                  # 의도 라벨 접두 제한
     ):
         assert required in prompt, required
 
@@ -67,7 +67,7 @@ def test_g1_market_cheer_replies_pass_gates():
 
 def test_g1_version_bumped():
     """G-1 반영 버전 확인 (지침 5)."""
-    assert generator.VERSION == "1.4.0"
+    assert generator.VERSION == "2.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ def test_g2_prompt_contains_tone_rules(monkeypatch):
     captured = _capture_prompt(monkeypatch)
     generator.generate_batch([{"id": "a", "text": "잘보고 있어요", "label": "POSITIVE"}])
     prompt = captured["prompt"]
-    for required in ("가볍고 친근한", "감탄사", "ㅎㅎ", "0~2개", "매번 같은 이모지 금지"):
+    for required in ("가볍고 친근한", "감탄사", "ㅎㅎ", "0~1개", "매번 같은 이모지 금지"):
         assert required in prompt, required
 
 
@@ -91,7 +91,7 @@ def test_g2_prompt_keeps_all_policy_rules(monkeypatch):
     for required in (
         "절대 금지", "행동 안내", "질문이어도 답하지 말고",       # C-1
         "저야말로", "상황어", "아는 척", "역할이 뒤집힘",         # P-2
-        "돈복사", "슈드", "하지 않은 행동에 감사",               # G-1
+        "돈복사", "슈드", "의도를 단정하지",               # G-1
         "서로 다른 단어로 시작",                                  # F-2
     ):
         assert required in prompt, required
@@ -123,4 +123,4 @@ def test_g2_fallback_still_deterministic():
 
 
 def test_g2_version_bumped():
-    assert generator.VERSION == "1.4.0"
+    assert generator.VERSION == "2.0.0"

@@ -184,7 +184,7 @@ def test_s06_within_batch_similarity(monkeypatch):
     assert "GATE_SIMILARITY" not in result["skip_reasons"]        # fallback이 흡수
     assert mem.history["301"]["skip_reason"] is None
     assert mem.history["301"]["response_text"] in (
-        generator._POOL_POSITIVE + generator._POOL_SUPPORTIVE
+        tuple(t for pool in generator.SAFE_POOLS.values() for t in pool)
     )                                                              # 풀 문구로 대체 발행
 
 
@@ -251,15 +251,15 @@ def test_s08_publish_fail_records_reason(monkeypatch):
     updated: list = []
     monkeypatch.setattr(
         store, "update_skip_reason",
-        lambda tid, reason: updated.append((tid, reason)) or True,
+        lambda tid, reason, error_message=None: updated.append((tid, reason)) or True,
     )
     _install_x(monkeypatch, [])
     monkeypatch.setattr(x_client, "post_reply", lambda _c, _t, _tid: None)  # 발행 실패
 
     result = run_reply.main()
     assert result["published"] == 0
-    assert result["skip_reasons"]["PUBLISH_FAIL"] == 1
-    assert updated == [("100", "PUBLISH_FAIL")]
+    assert result["skip_reasons"]["PUBLISH_UNKNOWN"] == 1
+    assert updated == [("100", "PUBLISH_UNKNOWN")]
     assert mem.history["100"]["responded"] is False
 
 
@@ -315,6 +315,7 @@ def test_s13_shadow_gate_fail_recorded(monkeypatch):
         lambda **_k: {"success": True, "data": banned},
     )
 
+    monkeypatch.setattr(generator, "contextual_fallbacks", lambda _tweet: ())
     result = run_reply.main()
     assert result["published"] == 0
     assert result["skip_reasons"]["GATE_BANNED_WORD"] == 1
@@ -324,5 +325,5 @@ def test_s13_shadow_gate_fail_recorded(monkeypatch):
 
 def test_pipeline_versions_bumped():
     """R-1/R-2 + B 시리즈 보완 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.8.0"
-    assert store.VERSION == "1.4.0"
+    assert run_reply.VERSION == "2.0.0"
+    assert store.VERSION == "2.0.0"

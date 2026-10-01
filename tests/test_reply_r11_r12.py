@@ -65,7 +65,7 @@ class _FakeQuery:
         else:
             data = list(self._rows)
         self._filters = []
-        return type("R", (), {"data": [{"reply_tweet_id": r["reply_tweet_id"]} for r in data]})()
+        return type("R", (), {"data": data})()
 
 
 def _install_fake(monkeypatch, rows: list[dict]) -> list:
@@ -122,22 +122,11 @@ def test_bulk_failure_is_conservative(monkeypatch):
     assert store.history_exists("a") is True
 
 
-def test_insert_history_uses_upsert(monkeypatch):
-    """재처리 시 PK 충돌을 피하려면 upsert여야 한다."""
-    seen: dict = {}
+def test_history_publication_state_cannot_be_overwritten(monkeypatch):
+    for state in ("PUBLISHING", "PUBLISH_UNKNOWN", "DB_CONFIRM_FAIL"):
+        _install_fake(monkeypatch, [{"reply_tweet_id": "x", "skip_reason": state}])
+        assert store.insert_history({"reply_tweet_id": "x"}) is False
 
-    class _C:
-        def table(self, _n): return self
-        def upsert(self, record, on_conflict=None):
-            seen["record"] = record
-            seen["on_conflict"] = on_conflict
-            return self
-        def execute(self):
-            return type("R", (), {"data": [{"reply_tweet_id": "x"}]})()
-
-    monkeypatch.setattr(store, "get_client", lambda: _C())
-    assert store.insert_history({"reply_tweet_id": "x"}) is True
-    assert seen["on_conflict"] == "reply_tweet_id"
 
 
 # ---------------------------------------------------------------------------

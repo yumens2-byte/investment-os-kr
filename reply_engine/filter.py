@@ -40,13 +40,15 @@ from reply_engine import store
 from reply_engine.config import (
     REPLY_AUTHOR_DAILY_CAP,
     REPLY_CONV_DAILY_CAP,
+    REPLY_LINK_REVIEW_ENABLED,
     REPLY_MAX_AGE_HOURS,
     SPAM_ACCOUNT_MIN_AGE_DAYS,
     SPAM_ACCOUNT_MIN_FOLLOWERS,
     SPAM_KEYWORDS,
 )
+from reply_engine.policy import REACTION_PATTERN
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +114,16 @@ def check_tweet(
 
     # 텍스트 휴리스틱 (멘션 핸들 제거 후 실질 텍스트 기준)
     body = re.sub(r"@\w+", "", text).strip()
-    if len(body) < 2:
+    if len(body) < 2 and not REACTION_PATTERN.fullmatch(body):
         return False, "TOO_SHORT"
-    if _URL_PATTERN.search(text):
+    if _URL_PATTERN.search(text) and not REPLY_LINK_REVIEW_ENABLED:
         return False, "SPAM_LINK"
     for kw in SPAM_KEYWORDS:
         if kw in text:
+            # Generic words alone are not proof of promotion.
+            if kw in {"광고", "홍보", "카톡"}:
+                if not re.search(r"(?:광고|홍보|카톡).*(?:문의|연락|가입|초대|참여|신청)", body):
+                    continue
             return False, "SPAM_KEYWORD"
 
     # 외국어 댓글은 생성 단계에서 AI를 호출하지 않고 검수된 정형 문구로 응답한다.
@@ -146,6 +152,7 @@ class CapContext:
     """
 
     existing_ids: set[str] = field(default_factory=set)
+    history_rows: dict[str, dict] = field(default_factory=dict)
     author_today: dict[str, int] = field(default_factory=dict)
     conv_today: dict[str, int] = field(default_factory=dict)
     author_run: dict[str, int] = field(default_factory=dict)
@@ -153,7 +160,7 @@ class CapContext:
     bulk_ready: bool = False
 
 
-def build_cap_context(tweets: list[dict]) -> CapContext:
+def build_cap_context(tweets: list[dict], existing_ids: set[str] | None = None) -> CapContext:
     """
     후보 트윗 목록으로 배치 스냅샷을 1회 구성한다 (DB 3쿼리 고정, R-5).
     정적 필터 통과 건에만 호출해 조회 대상을 최소화한다.
@@ -161,8 +168,10 @@ def build_cap_context(tweets: list[dict]) -> CapContext:
     ids = [t.get("id", "") for t in tweets]
     authors = [t.get("author_id", "") for t in tweets]
     convs = [t.get("conversation_id", "") for t in tweets]
+    existing = existing_ids if existing_ids is not None else store.history_exists_bulk(ids)
     return CapContext(
-        existing_ids=store.history_exists_bulk(ids),
+        existing_ids=existing,
+        history_rows=getattr(existing, "rows", {}),
         author_today=store.count_author_responded_today_bulk(authors),
         conv_today=store.count_conversation_responded_today_bulk(convs),
         bulk_ready=True,
@@ -212,3 +221,15 @@ def check_and_admit(tweet: dict, ctx: CapContext | None = None) -> tuple[bool, s
 def check_caps_and_dup(tweet: dict) -> tuple[bool, str | None]:
     """하위호환 래퍼 (기존 호출부·테스트 보존). in-run 계수 없음."""
     return check_and_admit(tweet, None)
+
+
+def check_duplicate(tweet: dict, ctx: CapContext) -> tuple[bool, str | None]:
+    return (False, "DUP") if tweet.get("id") in ctx.existing_ids else (True, None)
+
+
+def release_admission(tweet: dict, ctx: CapContext) -> None:
+    """Return a reservation only when publication is known not to have happened."""
+    author = tweet.get("author_id", "")
+    conversation = tweet.get("conversation_id", "")
+    ctx.author_run[author] = max(0, ctx.author_run.get(author, 0) - 1)
+    ctx.conv_run[conversation] = max(0, ctx.conv_run.get(conversation, 0) - 1)

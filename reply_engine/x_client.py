@@ -34,8 +34,9 @@ from typing import Any
 import tweepy
 
 from reply_engine.config import MENTIONS_MAX_PAGES, MENTIONS_MAX_RESULTS
+from reply_engine.policy import BatchResult
 
-VERSION = "1.4.0"
+VERSION = "2.0.0"
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +92,20 @@ def _parent_text(tweet: Any, referenced_texts: dict[str, str]) -> str:
             )
             if ref_type != "replied_to":
                 continue
-            ref_id = getattr(ref, "id", None) or (
-                ref.get("id") if isinstance(ref, dict) else None
-            )
+            ref_id = getattr(ref, "id", None) or (ref.get("id") if isinstance(ref, dict) else None)
             if ref_id:
                 return referenced_texts.get(str(ref_id), "")
     except Exception as exc:  # noqa: BLE001 - 관측 실패가 수집을 막지 않는다
         logger.warning(f"[XClient] 원글 컨텍스트 해석 실패 (무시): {exc}")
+    return ""
+
+
+def _parent_id(tweet) -> str:
+    for ref in getattr(tweet, "referenced_tweets", None) or []:
+        kind = ref.get("type") if isinstance(ref, dict) else getattr(ref, "type", None)
+        if kind == "replied_to":
+            value = ref.get("id") if isinstance(ref, dict) else getattr(ref, "id", "")
+            return str(value or "")
     return ""
 
 
@@ -128,8 +136,11 @@ def fetch_mentions(
     params: dict[str, Any] = {
         "max_results": MENTIONS_MAX_RESULTS,
         "tweet_fields": [
-            "author_id", "conversation_id", "in_reply_to_user_id",
-            "created_at", "referenced_tweets",
+            "author_id",
+            "conversation_id",
+            "in_reply_to_user_id",
+            "created_at",
+            "referenced_tweets",
         ],
         # R-12: referenced_tweets.id는 부모 트윗을 같은 응답의 includes에 실어주므로
         #       추가 읽기 콜이 발생하지 않는다.
@@ -158,15 +169,26 @@ def fetch_mentions(
         except Exception as exc:
             logger.error(f"[XClient] get_users_mentions 실패 (page={page + 1}): {exc}")
             if pages_fetched == 1:
-                return {"success": False, "tweets": [], "users": {}, "newest_id": None,
-                        "oldest_id": None, "saturated": False, "pages_fetched": 1,
-                        "collection_complete": False, "error": str(exc)}
+                return {
+                    "success": False,
+                    "tweets": [],
+                    "users": {},
+                    "newest_id": None,
+                    "oldest_id": None,
+                    "saturated": False,
+                    "pages_fetched": 1,
+                    "collection_complete": False,
+                    "error": str(exc),
+                }
             partial_error = str(exc)
             break
 
         includes = getattr(resp, "includes", None) or {}
         referenced_texts = {
-            str(rt.id): getattr(rt, "text", "") or ""
+            str(rt.id): getattr(rt, "text", "") or "" for rt in (includes.get("tweets", []) or [])
+        }
+        referenced_authors = {
+            str(rt.id): str(getattr(rt, "author_id", "") or "")
             for rt in (includes.get("tweets", []) or [])
         }
         if resp and resp.data:
@@ -182,6 +204,8 @@ def fetch_mentions(
                         ),
                         "created_at": t.created_at,
                         "parent_text": _parent_text(t, referenced_texts),
+                        "parent_id": _parent_id(t),
+                        "parent_author_id": referenced_authors.get(_parent_id(t), ""),
                     }
                 )
 
@@ -214,10 +238,17 @@ def fetch_mentions(
             f"oldest_id={oldest_id}, error={partial_error}"
         )
 
-    return {"success": True, "tweets": tweets, "users": users, "newest_id": newest_id,
-            "oldest_id": oldest_id, "saturated": saturated,
-            "pages_fetched": pages_fetched, "collection_complete": collection_complete,
-            "error": partial_error}
+    return {
+        "success": True,
+        "tweets": tweets,
+        "users": users,
+        "newest_id": newest_id,
+        "oldest_id": oldest_id,
+        "saturated": saturated,
+        "pages_fetched": pages_fetched,
+        "collection_complete": collection_complete,
+        "error": partial_error,
+    }
 
 
 def post_reply_with_error(
@@ -262,33 +293,22 @@ def post_like(client: tweepy.Client, tweet_id: str) -> tuple[bool, str | None]:
 def fetch_conversation_roots(
     client: tweepy.Client,
     conversation_ids: list[str],
-) -> dict[str, str] | None:
-    """
-    대화 루트 트윗들의 author_id 배치 조회 (P-1 스코프 검증, 1콜).
-
-    conversation_id == 루트 트윗 ID 이므로 GET /2/tweets?ids=... 로 소유자 확인 가능.
-    tweepy 4.17.0 확인: get_tweets(self, ids, *, user_auth=False, **params)
-
-    반환:
-      {conversation_id: root_author_id} — 조회된 것만 포함 (삭제/보호계정은 누락됨)
-      None — API 호출 자체 실패 (호출부에서 전량 보수적 스킵 처리)
-    """
+    *,
+    max_calls: int = 3,
+) -> dict[str, str]:
+    """Lookup roots in batches of at most 100, within the remaining read budget."""
     ids = [str(i) for i in dict.fromkeys(conversation_ids) if i]
-    if not ids:
-        return {}
-
-    try:
-        resp = client.get_tweets(ids=ids, user_auth=True, tweet_fields=["author_id"])
-    except Exception as exc:
-        logger.error(f"[XClient] 대화 루트 조회 실패: {exc}")
-        return None
-
-    roots: dict[str, str] = {}
-    if resp and resp.data:
-        for t in resp.data:
-            roots[str(t.id)] = str(t.author_id) if t.author_id else ""
-
-    logger.info(f"[XClient] 대화 루트 조회 {len(ids)}건 요청 → {len(roots)}건 확인")
+    roots = BatchResult()
+    for offset in range(0, min(len(ids), max(0, max_calls) * 100), 100):
+        roots.api_calls += 1
+        try:
+            response = client.get_tweets(
+                ids=ids[offset:offset + 100], user_auth=True, tweet_fields=["author_id"])
+        except Exception as exc:
+            logger.error("[XClient] root lookup failed: %s", exc)
+            break
+        for tweet in getattr(response, "data", None) or []:
+            roots[str(tweet.id)] = str(tweet.author_id or "")
     return roots
 
 

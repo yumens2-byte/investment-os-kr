@@ -32,13 +32,15 @@ v1.1.0 (2026-08-30, R-5): 배치 조회 3종 신설 (history_exists_bulk,
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 
 from db.supabase_client import get_client
-from reply_engine.config import REPLY_RETRY_WINDOW_HOURS
+from reply_engine.config import REPLY_MAX_AGE_HOURS, REPLY_RETRY_WINDOW_HOURS
+from reply_engine.policy import BLOCKED_STATES, DEFER_REASONS, decode_metadata
 
-VERSION = "1.4.0"
+VERSION = "2.0.0"
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ _KST_OFFSET = timedelta(hours=9)
 # 시간 헬퍼
 # ---------------------------------------------------------------------------
 
+
 def kst_today() -> str:
     """KST 기준 오늘 날짜 (YYYY-MM-DD)."""
     return (datetime.now(UTC) + _KST_OFFSET).date().isoformat()
@@ -63,9 +66,9 @@ def kst_today() -> str:
 def kst_day_start_utc_iso() -> str:
     """KST 오늘 00:00을 UTC ISO로 (created_at timestamptz 비교용)."""
     kst_now = datetime.now(UTC) + _KST_OFFSET
-    kst_midnight_as_utc = datetime(
-        kst_now.year, kst_now.month, kst_now.day, tzinfo=UTC
-    ) - _KST_OFFSET
+    kst_midnight_as_utc = (
+        datetime(kst_now.year, kst_now.month, kst_now.day, tzinfo=UTC) - _KST_OFFSET
+    )
     return kst_midnight_as_utc.isoformat()
 
 
@@ -73,66 +76,135 @@ def kst_day_start_utc_iso() -> str:
 # history — L1 멱등성 + 상한 카운트
 # ---------------------------------------------------------------------------
 
+
 def _retry_cutoff_iso() -> str:
     """재시도 창의 하한 시각 (R-11). 이보다 오래된 미발행 이력은 재시도하지 않는다."""
     return (datetime.now(UTC) - timedelta(hours=REPLY_RETRY_WINDOW_HOURS)).isoformat()
 
 
-def history_exists(reply_tweet_id: str) -> bool:
-    """
-    L1 가드: 이 댓글에 이미 답글이 나갔는가 (R-11).
-
-    '이력 존재'가 아니라 '실제 발행됨(response_tweet_id 존재)'을 중복 기준으로 본다.
-    미발행 이력(shadow 시뮬레이션, PUBLISH_FAIL)은 재시도 창 안에서는 중복이 아니며,
-    창을 넘기면 재시도를 종결하기 위해 중복으로 취급한다.
-    """
+def _blocked_row(row: dict) -> bool:
+    if row.get("response_tweet_id") or row.get("responded"):
+        return True
+    if row.get("skip_reason") in BLOCKED_STATES:
+        return True
+    meta = decode_metadata(row.get("error_message"))
+    if (
+        int(meta.get("publish_attempts", 0)) >= 3
+        or int(meta.get("classification_attempts", 0)) >= 3
+    ):
+        return True
+    due = meta.get("next_attempt_at")
     try:
-        published = (
-            get_client()
-            .table(_T_HISTORY)
-            .select("reply_tweet_id")
-            .eq("reply_tweet_id", reply_tweet_id)
-            .not_.is_("response_tweet_id", "null")
-            .limit(1)
-            .execute()
-        )
-        if published.data:
+        if due and datetime.fromisoformat(due) > datetime.now(UTC):
             return True
+    except (TypeError, ValueError):
+        return True
+    created = row.get("created_at")
+    return bool(created and str(created) < _retry_cutoff_iso())
 
-        expired = (
+
+def history_exists(reply_tweet_id: str) -> bool:
+    try:
+        rows = (
             get_client()
             .table(_T_HISTORY)
-            .select("reply_tweet_id")
+            .select("*")
             .eq("reply_tweet_id", reply_tweet_id)
-            .lt("created_at", _retry_cutoff_iso())
             .limit(1)
             .execute()
-        )
-        return bool(expired.data)
+        ).data or []
+        return any(_blocked_row(row) for row in rows)
     except Exception as exc:
-        logger.error(f"[Store] history_exists 조회 실패: {exc}")
-        # 조회 실패 시 True 반환 — 확인 불가면 발행하지 않는 보수적 처리
+        logger.error("[Store] history_exists failed: %s", exc)
         return True
 
 
 def insert_history(record: dict) -> bool:
-    """
-    이력 기록. 실패 시 False.
-
-    R-11: 발행 실패·shadow 건이 재처리 대상이 되므로 같은 reply_tweet_id로
-    다시 들어올 수 있다. PK 충돌을 피하기 위해 upsert를 쓴다.
-    """
+    """Insert new decisions or CAS-update unpublished rows; never overwrite publication."""
     try:
+        client = get_client()
+        rows = (
+            client.table(_T_HISTORY)
+            .select("*")
+            .eq("reply_tweet_id", record["reply_tweet_id"])
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            return bool(client.table(_T_HISTORY).insert(record).execute().data)
+        previous = rows[0]
+        if _blocked_row(previous):
+            return False
+        if record.get("mode") == "shadow" and previous.get("mode") == "live":
+            return False
+        old_meta = decode_metadata(previous.get("error_message"))
+        new_meta = decode_metadata(record.get("error_message"))
+        if old_meta and new_meta:
+            for counter in ("publish_attempts", "classification_attempts"):
+                new_meta[counter] = max(
+                    int(old_meta.get(counter, 0)), int(new_meta.get(counter, 0))
+                )
+            new_meta["original_created_at"] = old_meta.get("original_created_at")
+            record = {**record, "error_message": json.dumps(new_meta, ensure_ascii=False)}
+        query = (
+            client.table(_T_HISTORY)
+            .update(record)
+            .eq("reply_tweet_id", record["reply_tweet_id"])
+            .eq("responded", False)
+            .is_("response_tweet_id", "null")
+        )
+        if previous.get("skip_reason") is None:
+            query = query.is_("skip_reason", "null")
+        else:
+            query = query.eq("skip_reason", previous["skip_reason"])
+        return bool(query.execute().data)
+    except Exception as exc:
+        logger.error(
+            "[Store] history decision save failed (%s): %s", record.get("reply_tweet_id"), exc
+        )
+        return False
+
+
+def claim_publication(reply_tweet_id: str, metadata: str) -> str | None:
+    """Atomic READY -> PUBLISHING transition; return persisted attempt metadata."""
+    try:
+        client = get_client()
+        rows = (
+            client.table(_T_HISTORY)
+            .select("error_message")
+            .eq("reply_tweet_id", reply_tweet_id)
+            .limit(1)
+            .execute()
+        ).data or []
+        if not rows:
+            return None
+        previous = decode_metadata(rows[0].get("error_message"))
+        current = decode_metadata(metadata)
+        attempts = int(previous.get("publish_attempts", 0))
+        if attempts >= 3:
+            return None
+        current["publish_attempts"] = attempts + 1
+        current["original_created_at"] = previous.get(
+            "original_created_at", current.get("original_created_at")
+        )
+        metadata = json.dumps(current, ensure_ascii=False)
         result = (
-            get_client()
-            .table(_T_HISTORY)
-            .upsert(record, on_conflict="reply_tweet_id")
+            client.table(_T_HISTORY)
+            .update({
+                "skip_reason": "PUBLISHING", "error_message": metadata,
+                "created_at": datetime.now(UTC).isoformat(),
+            })
+            .eq("reply_tweet_id", reply_tweet_id)
+            .eq("mode", "live")
+            .eq("responded", False)
+            .is_("response_tweet_id", "null")
+            .is_("skip_reason", "null")
             .execute()
         )
-        return bool(result.data)
+        return metadata if result.data else None
     except Exception as exc:
-        logger.error(f"[Store] insert_history 실패 ({record.get('reply_tweet_id')}): {exc}")
-        return False
+        logger.error("[Store] publication claim failed (%s): %s", reply_tweet_id, exc)
+        return None
 
 
 def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
@@ -140,16 +212,23 @@ def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
     for attempt in range(1, 4):
         try:
             result = (
-                get_client().table(_T_HISTORY)
-                .update({"responded": True, "response_tweet_id": response_tweet_id})
-                .eq("reply_tweet_id", reply_tweet_id).execute()
+                get_client()
+                .table(_T_HISTORY)
+                .update(
+                    {
+                        "responded": True,
+                        "response_tweet_id": response_tweet_id,
+                        "skip_reason": None,
+                        "created_at": datetime.now(UTC).isoformat(),
+                    }
+                )
+                .eq("reply_tweet_id", reply_tweet_id)
+                .execute()
             )
             if result.data:
                 return True
         except Exception as exc:
-            logger.error(
-                f"[Store] mark_responded 실패 ({reply_tweet_id}, {attempt}/3): {exc}"
-            )
+            logger.error(f"[Store] mark_responded 실패 ({reply_tweet_id}, {attempt}/3): {exc}")
     return False
 
 
@@ -185,7 +264,9 @@ def _count_today(column: str, value: str, responded_only: bool) -> int:
         if column:
             query = query.eq(column, value)
         if responded_only:
-            query = query.eq("responded", True)
+            query = query.or_(
+                "responded.eq.true,skip_reason.in.(PUBLISHING,PUBLISH_UNKNOWN,DB_CONFIRM_FAIL)"
+            )
         result = query.execute()
         return int(result.count or 0)
     except Exception as exc:
@@ -213,14 +294,16 @@ def get_history_metrics(days: int = 7) -> dict:
     since = (datetime.now(UTC) - timedelta(days=max(1, days))).isoformat()
     try:
         result = (
-            get_client().table(_T_HISTORY)
+            get_client()
+            .table(_T_HISTORY)
             .select("responded,skip_reason,response_tweet_id")
-            .eq("mode", "live").gte("created_at", since).limit(5000).execute()
+            .eq("mode", "live")
+            .gte("created_at", since)
+            .limit(5000)
+            .execute()
         )
         rows = result.data or []
-        responded = sum(
-            bool(row.get("response_tweet_id") or row.get("responded")) for row in rows
-        )
+        responded = sum(bool(row.get("response_tweet_id") or row.get("responded")) for row in rows)
         skips: dict[str, int] = {}
         for row in rows:
             reason = row.get("skip_reason")
@@ -233,9 +316,7 @@ def get_history_metrics(days: int = 7) -> dict:
             "history_rows": total,
             "responded": responded,
             "response_rate": round(responded / total, 4) if total else 0.0,
-            "skip_reasons": dict(
-                sorted(skips.items(), key=lambda item: (-item[1], item[0]))[:10]
-            ),
+            "skip_reasons": dict(sorted(skips.items(), key=lambda item: (-item[1], item[0]))[:10]),
             "truncated": total >= 5000,
         }
     except Exception as exc:
@@ -248,25 +329,52 @@ def get_history_metrics(days: int = 7) -> dict:
 
 
 def get_retryable_history(limit: int = 10) -> list[dict]:
-    """커서 전진 후 다시 수집되지 않는 최근 live 발행 실패를 DB에서 복구한다."""
+    """Bounded oldest-first recovery of deferred decisions, never unknown publications."""
     try:
+        limit = max(1, min(100, limit))
         result = (
-            get_client().table(_T_HISTORY)
-            .select(
-                "reply_tweet_id,conversation_id,author_id,author_username,"
-                "comment_text,classification,response_text,skip_reason"
-            )
-            .eq("mode", "live").eq("responded", False)
-            .eq("skip_reason", "PUBLISH_FAIL")
+            get_client()
+            .table(_T_HISTORY)
+            .select("*")
+            .eq("mode", "live")
+            .eq("responded", False)
+            .is_("response_tweet_id", "null")
+            .in_("skip_reason", sorted(DEFER_REASONS))
             .gte("created_at", _retry_cutoff_iso())
-            .order("created_at").limit(max(1, limit)).execute()
+            .order("created_at")
+            .limit(min(500, limit * 5))
+            .execute()
         )
-        return [
-            row for row in (result.data or [])
-            if row.get("reply_tweet_id") and row.get("response_text")
-        ]
+        rows = []
+        now = datetime.now(UTC)
+        for row in result.data or []:
+            meta = decode_metadata(row.get("error_message"))
+            # Legacy PUBLISH_FAIL has no proof of non-publication and is not eligible.
+            if not meta or not row.get("reply_tweet_id"):
+                continue
+            try:
+                original = datetime.fromisoformat(
+                    str(meta.get("original_created_at")).replace("Z", "+00:00")
+                )
+                if original.tzinfo is None:
+                    original = original.replace(tzinfo=UTC)
+                if now - original > timedelta(hours=REPLY_MAX_AGE_HOURS):
+                    continue
+                if int(meta.get("publish_attempts", 0)) >= 3:
+                    continue
+                due = meta.get("next_attempt_at")
+                if due and datetime.fromisoformat(due) > now:
+                    continue
+                if int(meta.get("classification_attempts", 0)) >= 3:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+        return rows
     except Exception as exc:
-        logger.warning(f"[Store] 재시도 이력 조회 실패 (신규 처리 계속): {exc}")
+        logger.warning("[Store] recovery lookup failed: %s", exc)
         return []
 
 
@@ -284,49 +392,26 @@ def _chunks(items: list[str], size: int = _IN_CHUNK_SIZE):
         yield items[i : i + size]
 
 
+class HistoryLookup(set):
+    """Blocked IDs plus rows from the same query, for retry metadata hydration."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = {}
+
+
 def history_exists_bulk(reply_tweet_ids: list[str]) -> set[str]:
-    """
-    L1 배치 가드: 재응답하면 안 되는 reply_tweet_id 집합 (R-11).
-
-    중복 기준은 '이력 존재'가 아니라 다음 둘 중 하나다.
-      (a) 실제 발행됨 — response_tweet_id 존재
-      (b) 재시도 창 경과 — 미발행이지만 REPLY_RETRY_WINDOW_HOURS를 넘긴 이력
-
-    조회 실패 시 전건 '중복'으로 반환한다 — 확인 불가면 발행하지 않는 보수적 처리
-    (단건 history_exists와 동일 정책).
-    """
     ids = [i for i in dict.fromkeys(reply_tweet_ids) if i]
-    if not ids:
-        return set()
-
-    cutoff = _retry_cutoff_iso()
-    found: set[str] = set()
+    found = HistoryLookup()
     try:
         for chunk in _chunks(ids):
-            published = (
-                get_client()
-                .table(_T_HISTORY)
-                .select("reply_tweet_id")
-                .in_("reply_tweet_id", chunk)
-                .not_.is_("response_tweet_id", "null")
-                .execute()
-            )
-            expired = (
-                get_client()
-                .table(_T_HISTORY)
-                .select("reply_tweet_id")
-                .in_("reply_tweet_id", chunk)
-                .lt("created_at", cutoff)
-                .execute()
-            )
-            for result in (published, expired):
-                found |= {
-                    row["reply_tweet_id"]
-                    for row in (result.data or [])
-                    if row.get("reply_tweet_id")
-                }
+            rows = (
+                get_client().table(_T_HISTORY).select("*").in_("reply_tweet_id", chunk).execute()
+            ).data or []
+            found.rows.update({row["reply_tweet_id"]: row for row in rows})
+            found.update(row["reply_tweet_id"] for row in rows if _blocked_row(row))
     except Exception as exc:
-        logger.error(f"[Store] history_exists_bulk 실패 → 전건 DUP 처리: {exc}")
+        logger.error("[Store] duplicate lookup failed: %s", exc)
         return set(ids)
     return found
 
@@ -348,11 +433,13 @@ def _count_today_bulk(column: str, values: list[str]) -> dict[str, int]:
                 .table(_T_HISTORY)
                 .select(column)
                 .gte("created_at", kst_day_start_utc_iso())
-                .eq("responded", True)
+                .or_(
+                    "responded.eq.true,skip_reason.in.(PUBLISHING,PUBLISH_UNKNOWN,DB_CONFIRM_FAIL)"
+                )
                 .in_(column, chunk)
                 .execute()
             )
-            for row in (result.data or []):
+            for row in result.data or []:
                 key = row.get(column)
                 if key:
                     counts[key] = counts.get(key, 0) + 1
@@ -394,17 +481,11 @@ def get_recent_response_texts(limit: int = 30) -> list[str]:
 # cursor — L2
 # ---------------------------------------------------------------------------
 
+
 def get_cursor(account: str) -> dict | None:
     """{since_id, my_user_id} 반환. 없으면 None."""
     try:
-        result = (
-            get_client()
-            .table(_T_CURSOR)
-            .select("*")
-            .eq("account", account)
-            .limit(1)
-            .execute()
-        )
+        result = get_client().table(_T_CURSOR).select("*").eq("account", account).limit(1).execute()
         return result.data[0] if result.data else None
     except Exception as exc:
         logger.error(f"[Store] get_cursor 실패: {exc}")
@@ -436,6 +517,7 @@ def upsert_cursor(account: str, since_id: str, my_user_id: str) -> bool:
 # budget
 # ---------------------------------------------------------------------------
 
+
 def get_budget(budget_date: str) -> dict:
     """당일 예산 행 조회. 없으면 0으로 초기화된 dict (INSERT는 upsert_budget에서)."""
     try:
@@ -451,6 +533,7 @@ def get_budget(budget_date: str) -> dict:
             return result.data[0]
     except Exception as exc:
         logger.error(f"[Store] get_budget 실패: {exc}")
+        raise RuntimeError("Daily API budget could not be loaded") from exc
     return {
         "budget_date": budget_date,
         "read_calls": 0,
@@ -474,6 +557,7 @@ def upsert_budget(row: dict) -> bool:
 # ---------------------------------------------------------------------------
 # blacklist
 # ---------------------------------------------------------------------------
+
 
 def get_blacklist_ids() -> set[str]:
     """블랙리스트 author_id 집합. 실패 시 빈 집합 (블랙리스트는 부가 방어층)."""
@@ -507,8 +591,13 @@ def get_existing_like_ids(tweet_ids: list[str]) -> set[str]:
 def count_likes_today() -> int:
     """KST 기준 당일 기록된 실/시뮬레이션 좋아요 수."""
     try:
-        result = (get_client().table(_T_LIKES).select("reply_tweet_id", count="exact")
-                  .gte("created_at", kst_day_start_utc_iso()).execute())
+        result = (
+            get_client()
+            .table(_T_LIKES)
+            .select("reply_tweet_id", count="exact")
+            .gte("created_at", kst_day_start_utc_iso())
+            .execute()
+        )
         return int(result.count or 0)
     except Exception as exc:
         logger.error(f"[Store] 당일 like 카운트 실패: {exc}")

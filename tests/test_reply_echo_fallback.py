@@ -104,7 +104,7 @@ def test_f2_pipeline_recovers_coverage(monkeypatch):
     assert "GATE_SIMILARITY" not in result["skip_reasons"]
     # 두 번째 건은 풀 문구로 대체 발행되었어야 함
     assert published[0][1] == same
-    assert published[1][1] in generator._POOL_POSITIVE + generator._POOL_SUPPORTIVE
+    assert published[1][1] in tuple(t for pool in generator.SAFE_POOLS.values() for t in pool)
     # review에는 대체된 최종 문구가 기록됨
     assert result["review"][1]["reply_text"] == published[1][1]
 
@@ -153,6 +153,6 @@ def test_f2_fallback_rotates_past_recent_duplicate(monkeypatch):
 
 def test_versions_bumped_f_series():
     """F-1/F-2 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.8.0"
-    assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.4.0"
+    assert run_reply.VERSION == "2.0.0"
+    assert gate.VERSION == "2.0.0"
+    assert generator.VERSION == "2.0.0"

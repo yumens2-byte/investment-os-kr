@@ -27,10 +27,11 @@ reply_engine/lang.py
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from reply_engine.config import REPLY_NON_KR_LATIN_THRESHOLD
 
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 # 멘션은 항상 라틴 문자이므로 판정 전 반드시 제거해야 한다.
 # (제거하지 않으면 "@tiger18272 감사합니다"가 외국어로 오판된다)
@@ -69,5 +70,13 @@ def is_non_korean(text: str) -> bool:
     if not body:
         return False
     if _HANGUL_PATTERN.search(body):
-        return False
-    return len(_LATIN_PATTERN.findall(body)) >= REPLY_NON_KR_LATIN_THRESHOLD
+        # Non-Latin mixed scripts are routed conservatively even with one Hangul token.
+        return any(
+            unicodedata.category(ch).startswith("L")
+            and not ch.isascii()
+            and not _HANGUL_PATTERN.fullmatch(ch)
+            for ch in body
+        )
+    return len(_LATIN_PATTERN.findall(body)) >= REPLY_NON_KR_LATIN_THRESHOLD or any(
+        unicodedata.category(ch).startswith("L") and not ch.isascii() for ch in body
+    )

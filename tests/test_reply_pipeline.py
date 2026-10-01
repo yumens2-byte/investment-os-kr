@@ -54,6 +54,8 @@ def test_fetch_mentions_parses_response():
         "in_reply_to_user_id": "111",
         "created_at": tweet.created_at,
         "parent_text": "",     # R-12: referenced_tweets 없음 → 빈 문자열
+        "parent_id": "",
+        "parent_author_id": "",
     }
     assert result["users"]["222"]["followers"] == 42
 
@@ -171,6 +173,8 @@ class _MemStore:
             monkeypatch.setattr(mod, "count_conversation_responded_today_bulk", lambda _ids: {})
         monkeypatch.setattr(store, "insert_history", self._insert)
         monkeypatch.setattr(store, "mark_responded", self._mark)
+        monkeypatch.setattr(store, "claim_publication", self._claim)
+        monkeypatch.setattr(store, "update_skip_reason", self._update_skip)
         monkeypatch.setattr(store, "count_responded_today", lambda: self.responded_count)
         monkeypatch.setattr(store, "get_retryable_history", lambda _limit=10: [])
         monkeypatch.setattr(
@@ -199,12 +203,26 @@ class _MemStore:
 
     def _insert(self, record):
         tid = record["reply_tweet_id"]
-        if tid in self.history:
+        if tid in self.history and (self.history[tid].get("responded")
+                or self.history[tid].get("skip_reason") in {"PUBLISHING", "PUBLISH_UNKNOWN"}):
             return False
         self.history[tid] = dict(record)
         return True
 
+    def _claim(self, tid, metadata):
+        row = self.history[tid]
+        if row.get("responded") or row.get("skip_reason") is not None:
+            return False
+        row["skip_reason"] = "PUBLISHING"
+        row["error_message"] = metadata
+        return True
+
+    def _update_skip(self, tid, reason, error_message=None):
+        self.history[tid].update(skip_reason=reason, error_message=error_message)
+        return True
+
     def _mark(self, tid, rid):
+        self.history[tid]["skip_reason"] = None
         self.history[tid]["responded"] = True
         self.history[tid]["response_tweet_id"] = rid
         return True
@@ -321,7 +339,7 @@ def test_live_preserves_cursor_when_history_is_not_durable(monkeypatch):
 
     result = run_reply.main()
 
-    assert result["skip_reasons"]["HISTORY_INSERT_FAIL"] == 1
+    assert result["skip_reasons"]["HISTORY_INSERT_FAIL"] == 3
     assert result["cursor_advanced"] is False
     assert mem.cursor_saved == []
 
@@ -370,7 +388,11 @@ def test_live_recovers_publish_failure_after_cursor_advanced(monkeypatch):
             "reply_tweet_id": "failed-1", "conversation_id": "conv-1",
             "author_id": "author-1", "comment_text": "좋은 글 감사합니다",
             "classification": "POSITIVE", "response_text": "좋게 봐주셔서 감사해요",
-            "skip_reason": "PUBLISH_FAIL",
+            "skip_reason": "PUBLISH_RETRYABLE",
+            "error_message": run_reply.encode_metadata({
+                "created_at": datetime.now(UTC), "in_reply_to_user_id": "111",
+                "_account_user_id": "111", "text": "좋은 글 감사합니다",
+            }),
         }],
     )
 
@@ -414,7 +436,7 @@ def test_pilot_shadow_records_without_publish(monkeypatch):
     assert published == []                        # X 발행 없음
     assert mem.history["100"]["mode"] == "shadow"
     assert mem.history["100"]["responded"] is False
-    assert mem.cursor_saved != []                 # 커서 전진 O
+    assert mem.cursor_saved == [("kr_main:shadow", "102", "111")]
 
 
 def test_pilot_duplicate_blocked(monkeypatch):

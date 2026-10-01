@@ -121,7 +121,7 @@ def test_alert_triggered_only_on_failure(monkeypatch):
     mem2 = _MemStore()
     mem2.install(monkeypatch)
     run_reply.main()
-    assert len(sent) == 1 and "PUBLISH_FAIL=1" in sent[0]
+    assert len(sent) == 1 and "PUBLISH_UNKNOWN=1" in sent[0]
 
 
 # ── Q-3 ────────────────────────────────────────────────────────────────
@@ -136,10 +136,10 @@ def test_q3_prompt_neutral_rule(monkeypatch):
 
 
 def test_versions_ops_hardening():
-    assert run_reply.VERSION == "1.8.0"
-    assert filter_mod.VERSION == "1.1.0"
-    assert config.VERSION == "1.5.0"
-    assert store.VERSION == "1.4.0"
-    assert x_client.VERSION == "1.4.0"
-    assert generator.VERSION == "1.4.0"
+    assert run_reply.VERSION == "2.0.0"
+    assert filter_mod.VERSION == "2.0.0"
+    assert config.VERSION == "2.0.0"
+    assert store.VERSION == "2.0.0"
+    assert x_client.VERSION == "2.0.0"
+    assert generator.VERSION == "2.0.0"
     assert alert.VERSION == "1.0.0"
