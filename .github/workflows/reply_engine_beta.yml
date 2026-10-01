@@ -53,7 +53,7 @@ jobs:
 
           # Supabase
           SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:           ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_KEY:           ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
 
           # Gemini 4키 chain (Main → Sub → Sub2 → Pay)
           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}

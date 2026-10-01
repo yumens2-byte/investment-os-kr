@@ -69,3 +69,21 @@ service_role에서 live/shadow 2행 INSERT·SELECT 및 PK 중복 거부 검사 �
 **좋아요 테이블 APIError는 운영 API 감사에서 여전히 남았다.** 직접 DB의 존재·권한 검증과 런타임 API 조회는 별도다. 테이블 추가만으로 오류 해결을 선언하지 않고 스키마 캐시 재로드와 오류 코드·운영 연결 역할 진단을 진행한다. 진단 커밋 표식 `reply-engine-v2-schema-probe`는 X/Gemini/live 실행 없이 DB 읽기 검사만 수행한다.
 
 신규 적격 댓글이 없어서 실제 X 발행 ID·발행 후 responded 저장 검증은 미완료다. 실제 신규 대상이 들어오는 운영 실행에서 확인해야 한다.
+
+## 권한 오류의 최종 진단·필요 설정
+
+[읽기 전용 운영 진단 36930363218](https://github.com/yumens2-byte/investment-os-kr/actions/runs/36930363218)의 전체 테스트는 660건 통과(15.45초)했다. DB probe는 실패 상태를 정확하게 반환했다. artifact ID 11195433653.
+
+- 실제 SQLSTATE: `42501`(권한 거부).
+- 운영 연결의 프로젝트 ref 일치: true.
+- 키 유형: JWT, 선언된 역할: anon. JWT 진단은 서명을 인증한 결과가 아니지만 실제 API 권한 거부와 함께 원인을 구분하는 근거다.
+- 필수 기존 테이블·123행 정합성은 정상, likes만 권한 거부.
+- 이 프로브는 DB 읽기만 수행했다. X/Gemini/답글·좋아요 발행/예산·커서 변경 없음.
+
+reply 본 실행·사전 검사·베타에서 전용 GitHub Secret `SUPABASE_REPLY_SERVICE_ROLE_KEY`를 우선 사용하도록 수정했다. 미등록 시 기존 `SUPABASE_KEY`를 사용하여 현재 답글 기능을 유지한다. **키를 등록하기 전에는 좋아요 API 오류가 해결되지 않는다.** 다른 파이프라인의 키 설정은 변경하지 않았다.
+
+운영자가 [저장소 Actions Secrets](https://github.com/yumens2-byte/investment-os-kr/settings/secrets/actions)에 `SUPABASE_REPLY_SERVICE_ROLE_KEY`를 등록해야 한다. 값은 현재 운영 Supabase 프로젝트의 서버용 service_role 키다. 현재 연결 도구는 GitHub Secrets 쓰기를 지원하지 않아 여기서 등록하지 못했다. 키 원문을 보고서·로그·소스·대화에 기록하지 않는다.
+
+등록 후 기존 X Reply Engine을 dry_run으로 실행해 DB 사전 검사 artifact의 `optional_schema_errors={}`와 정상 정합성을 확인한다. 이후 신규 적격 댓글에서 실제 X 발행·response ID 저장을 확인한다. 좋아요 활성화는 이번 변경에 포함되지 않는다.
+
+완료: 코드 수정, 3개 독립 AI 리뷰, 전체 660개 테스트, 실제 댓글 6건 생성·gate·직접 의미 검토, 운영 반영·재생·dry/live 베타, 오류 원인 확정. 미완료: 서버 키 직접 등록 및 그 키의 실제 API 조회 검증, 신규 적격 댓글 실발행 검증, 운영 표본 누적에 따른 스킵 감소율.

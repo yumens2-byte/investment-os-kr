@@ -50,3 +50,9 @@
 신규 멘션이 없는 상태에서 테스트용 공개 댓글을 임의로 만들거나 커서를 되돌려 과거 댓글을 강제로 재발행하지 않았다. 기존 스케줄에서 새 운영 버전이 적용되며, 신규 댓글이 생긴 실행의 artifact를 기준으로 잔여 검증한다.
 
 상세 원인·수정·검증 계약은 [REPLY_ENGINE_V2_REVIEW.md](REPLY_ENGINE_V2_REVIEW.md)와 [REPLY_ENGINE_V2.md](REPLY_ENGINE_V2.md)에 기록했다.
+
+## 잔여 진행 결과
+
+후속 작업에서 실제 댓글·부모 문맥 6건을 검증하고 무료 Gemini 2회로 재생했다. 최종 6건 gate 통과(문맥 반영 AI 4건, 정형 fallback 2건) 및 독립 의미 검토를 수행했다. 실제 발행은 신규 적격 댓글 0건으로 미검증이다.
+
+좋아요 오류는 코드가 요구하는 테이블 부재와 운영 anon 키의 권한 거부 `42501`을 순서대로 확인했다. 서버 전용 테이블·권한을 보완했고 reply 전용 서버 Secret 우선 연결을 준비했다. `SUPABASE_REPLY_SERVICE_ROLE_KEY` 등록 전에는 조회 오류가 남는다. 최종 전체 660건 테스트 통과와 상세 실제 결과·필요 설정은 [REPLY_ENGINE_V2_RESIDUAL.md](REPLY_ENGINE_V2_RESIDUAL.md)를 따른다. 위 초기 베타 시점의 DB 스키마 미변경 기록과 오류 원인 미확정 문구는 과거 실행의 기록이다.
