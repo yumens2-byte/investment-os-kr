@@ -92,7 +92,7 @@ def test_p1_fetch_conversation_roots_failure_returns_none():
         def get_tweets(self, ids, **_kwargs):
             raise RuntimeError("429")
 
-    assert x_client.fetch_conversation_roots(_Client(), ["100"]) is None
+    assert x_client.fetch_conversation_roots(_Client(), ["100"]) == {}
     assert x_client.fetch_conversation_roots(_Client(), []) == {}  # 빈 입력은 호출 없이 {}
 
 
@@ -175,15 +175,15 @@ def test_p1_e2e_incident_full_regression(monkeypatch):
     result = run_reply.main()
     assert result["published"] == 0
     assert result["skip_reasons"]["OUT_OF_SCOPE_THREAD"] == 1
-    assert mem.history == {}  # 범위 밖 건은 이력 미기록 (R-4 정책과 동일)
+    assert mem.history["2089493697151009214"]["skip_reason"] == "OUT_OF_SCOPE_THREAD"
 
 
 def test_versions_bumped_p_series():
     """P-1/P-2 반영 버전 확인 (지침 5)."""
     from reply_engine import config
 
-    assert run_reply.VERSION == "1.8.0"
-    assert x_client.VERSION == "1.4.0"
-    assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.4.0"
-    assert config.VERSION == "1.5.0"
+    assert run_reply.VERSION == "2.0.0"
+    assert x_client.VERSION == "2.0.0"
+    assert gate.VERSION == "2.0.0"
+    assert generator.VERSION == "2.0.0"
+    assert config.VERSION == "2.0.0"

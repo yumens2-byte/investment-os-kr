@@ -65,7 +65,7 @@ def test_kst_helpers_format():
 
 def test_history_exists_true_false(monkeypatch):
     """R-11: 중복 기준은 '실제 발행됨' 또는 '재시도 창 경과'다."""
-    _patch_client(monkeypatch, data=[{"reply_tweet_id": "t1"}])
+    _patch_client(monkeypatch, data=[{"reply_tweet_id": "t1", "response_tweet_id": "r1"}])
     assert store.history_exists("t1") is True
 
     _patch_client(monkeypatch, data=[])

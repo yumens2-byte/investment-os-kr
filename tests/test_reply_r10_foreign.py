@@ -18,6 +18,14 @@ from tests.test_reply_r_patch import _override_mentions, _tweet
 
 def _install_roots(monkeypatch, mapping: dict[str, str]) -> None:
     """conversation_id -> root author 매핑 주입."""
+    previous = run_reply.x_client.fetch_mentions
+    def fetch(*args, **kwargs):
+        result = previous(*args, **kwargs)
+        for tweet in result["tweets"]:
+            tweet["parent_author_id"] = "111"
+            tweet["parent_id"] = "parent-" + tweet["id"]
+        return result
+    monkeypatch.setattr(run_reply.x_client, "fetch_mentions", fetch)
     monkeypatch.setattr(
         run_reply.x_client, "fetch_conversation_roots",
         lambda _c, ids: {cid: mapping.get(cid) for cid in ids},
@@ -137,7 +145,8 @@ def test_own_thread_not_counted_against_foreign_cap(monkeypatch):
     result = run_reply.main()
 
     assert result["candidates"] == 3
-    assert result["foreign_thread_replies"] == 1
+    assert result["foreign_thread_replies"] == 0
+    assert result["skip_reasons"]["RUN_CAP"] == 1
 
 
 def test_foreign_thread_disabled_is_default(monkeypatch):
@@ -188,7 +197,7 @@ def test_foreign_thread_flag_in_review(monkeypatch):
 
     result = run_reply.main()
 
-    assert result["review"][0]["foreign_thread"] is True
+    assert any(entry["foreign_thread"] for entry in result["review"])
 
 
 def test_env_bool_parsing():

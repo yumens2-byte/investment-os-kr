@@ -40,6 +40,7 @@ def test_report_exposes_conversion_funnel(monkeypatch, tmp_path):
         "candidate_rate": 0.5,
         "classification_pass_rate": 0.8,
         "publish_rate_of_collected": 0.3,
+        "publish_rate_of_processed": 0.3,
         "publish_rate_of_pass": 0.75,
     }
     assert report["finished_at"]

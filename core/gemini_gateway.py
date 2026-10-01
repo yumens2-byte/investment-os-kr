@@ -22,13 +22,13 @@ Gemini API 호출 공통 모듈 (KR Market OS, 라이트 OS 적응판)
       라이트 OS에 이식. DLQ 의존성은 라이트 OS에 모듈이 없어 제거.
       이미지 생성은 라이트 OS에서 미사용으로 제외.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
 import time
-from typing import Optional
 
 VERSION = "1.0.0"
 
@@ -57,6 +57,7 @@ DEFAULT_MAX_TOKENS: int = 1024
 # 키 빌더 (Main → Sub → Sub2 → Pay)
 # ---------------------------------------------------------------------------
 
+
 def _build_keys() -> list[tuple[str, str, bool]]:
     """
     Main/Sub/Sub2(무료) → Pay(유료) 키 리스트 구성.
@@ -78,6 +79,7 @@ def _get_client(api_key: str):
     """google-genai Client 생성"""
     try:
         from google import genai
+
         return genai.Client(api_key=api_key)
     except ImportError as e:
         raise ImportError(
@@ -94,6 +96,7 @@ def is_available() -> bool:
 # 텍스트 호출 (call)
 # ---------------------------------------------------------------------------
 
+
 def call(
     prompt: str,
     model: str = "flash-lite",
@@ -101,7 +104,8 @@ def call(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = 0.7,
     response_json: bool = False,
-    fallback_value: Optional[str] = None,
+    fallback_value: str | None = None,
+    allow_paid: bool = True,
 ) -> dict:
     """
     Gemini API 텍스트 호출 (Main → Sub → Sub2 → Pay 자동 전환).
@@ -126,7 +130,7 @@ def call(
           "error": str | None,
         }
     """
-    keys = _build_keys()
+    keys = [key for key in _build_keys() if allow_paid or not key[2]]
     if not keys:
         logger.warning("[GeminiGW] API 키 미설정 (GEMINI_API_KEY 계열) — 호출 스킵")
         return _fail_result("API 키 미설정", fallback_value)
@@ -139,6 +143,7 @@ def call(
 
     model_name = MODEL_MAP.get(model, MODEL_MAP["flash-lite"])
     last_error = ""
+    api_calls = 0
 
     for key_label, api_key, is_paid in keys:
         # 유료 키 진입 시 경고 로그 (실제 과금)
@@ -157,6 +162,7 @@ def call(
                 if response_json:
                     config.response_mime_type = "application/json"
 
+                api_calls += 1
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
@@ -173,6 +179,15 @@ def call(
                     "key_used": key_label,
                     "paid": is_paid,
                     "error": None,
+                    "api_calls": api_calls,
+                    "usage": {
+                        name: getattr(getattr(response, "usage_metadata", None), name, None)
+                        for name in (
+                            "prompt_token_count",
+                            "candidates_token_count",
+                            "total_token_count",
+                        )
+                    },
                 }
 
                 # JSON 모드 시 파싱 시도
@@ -202,21 +217,24 @@ def call(
                     f"error={last_error}"
                 )
                 if attempt < MAX_RETRIES:
-                    sleep_sec = BACKOFF_BASE ** attempt
+                    sleep_sec = BACKOFF_BASE**attempt
                     time.sleep(sleep_sec)
                 # 마지막 시도 실패 → 다음 키로 넘어감
                 continue
 
     # 모든 키 실패
     logger.error(f"[GeminiGW] 전체 키 실패: {last_error}")
-    return _fail_result(last_error, fallback_value)
+    result = _fail_result(last_error, fallback_value)
+    result["api_calls"] = api_calls
+    return result
 
 
 # ---------------------------------------------------------------------------
 # 실패 결과 빌더
 # ---------------------------------------------------------------------------
 
-def _fail_result(error: str, fallback_value: Optional[str] = None) -> dict:
+
+def _fail_result(error: str, fallback_value: str | None = None) -> dict:
     return {
         "success": False,
         "text": fallback_value or "",
@@ -225,4 +243,5 @@ def _fail_result(error: str, fallback_value: Optional[str] = None) -> dict:
         "key_used": "",
         "paid": False,
         "error": error,
+        "api_calls": 0,
     }

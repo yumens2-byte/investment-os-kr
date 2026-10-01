@@ -83,8 +83,8 @@ def test_c3_review_entries_in_report(monkeypatch):
     _install_x(monkeypatch, [])
 
     result = run_reply.main()
-    assert len(result["review"]) == 1
-    entry = result["review"][0]
+    assert len(result["review"]) == 3
+    entry = next(e for e in result["review"] if e["reply_tweet_id"] == "100")
     assert entry["reply_tweet_id"] == "100"
     assert entry["label"] == "POSITIVE"
     assert entry["comment_preview"].startswith("@edt")
@@ -107,10 +107,12 @@ def test_c3_incident_regression_full_path(monkeypatch):
     )
 
     result = run_reply.main()
-    assert result["published"] == 0
-    assert result["skip_reasons"]["GATE_IMPERATIVE"] == 1
-    assert result["review"][0]["result"] == "GATE_IMPERATIVE"
-    assert result["review"][0]["reply_text"] == "네, 바로 확인해 보세요!"
+    assert result["published"] == 1
+    entry = next(e for e in result["review"] if e["reply_tweet_id"] == "100")
+    assert entry["draft_gate_reason"] == "GATE_IMPERATIVE"
+    assert entry["source"] == "TEMPLATE_FALLBACK"
+    assert entry["reply_text"] != "네, 바로 확인해 보세요!"
+    assert gate.check_reply(entry["reply_text"], [], comment_text=entry["comment_preview"])[0]
 
 
 def test_c3_live_published_result(monkeypatch):
@@ -123,11 +125,11 @@ def test_c3_live_published_result(monkeypatch):
 
     result = run_reply.main()
     assert result["published"] == 1
-    assert result["review"][0]["result"] == "PUBLISHED"
+    assert next(e for e in result["review"] if e["reply_tweet_id"] == "100")["result"] == "PUBLISHED"
 
 
 def test_versions_bumped_c_series():
     """C 시리즈 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "1.8.0"
-    assert gate.VERSION == "1.1.1"
-    assert generator.VERSION == "1.4.0"
+    assert run_reply.VERSION == "2.0.0"
+    assert gate.VERSION == "2.0.0"
+    assert generator.VERSION == "2.0.0"

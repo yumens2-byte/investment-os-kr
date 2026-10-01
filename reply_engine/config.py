@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import os
 
-VERSION = "1.5.0"
+VERSION = "2.0.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -89,9 +89,9 @@ REPLY_LIKE_PER_DAY: int = env_int_clamped("REPLY_LIKE_PER_DAY", 50, 1, 1000)
 REPLY_MAX_AGE_HOURS: int = env_int_clamped("REPLY_MAX_AGE_HOURS", 24, 1, 168)
 
 # 답글 텍스트 규격
-REPLY_MAX_LENGTH: int = 40          # 공백 포함 최대 길이 ("한 줄 미만" 정책)
-REPLY_SIMILARITY_THRESHOLD: float = 0.6   # 최근 발행분 대비 자카드 유사도 상한
-REPLY_RECENT_COMPARE_COUNT: int = 30      # 유사도 비교 대상 최근 발행 건수
+REPLY_MAX_LENGTH: int = 40  # 공백 포함 최대 길이 ("한 줄 미만" 정책)
+REPLY_SIMILARITY_THRESHOLD: float = 0.6  # 최근 발행분 대비 자카드 유사도 상한
+REPLY_RECENT_COMPARE_COUNT: int = 30  # 유사도 비교 대상 최근 발행 건수
 
 # 발행 간 지터 (초) — live 모드 전용
 PUBLISH_JITTER_MIN_SEC: int = 40
@@ -126,14 +126,30 @@ FALLBACK_WRITE_CALLS_PER_DAY: int = 5
 # 금지어 — 답글에 포함 시 발행 차단 (생성 오작동 신호로 간주)
 # ---------------------------------------------------------------------------
 BANNED_WORDS: tuple[str, ...] = (
-    "매수", "매도", "수익 보장", "수익보장", "종목 추천", "종목추천",
-    "리딩방", "오픈채팅", "텔레그램", "투자 권유",
+    "매수",
+    "매도",
+    "수익 보장",
+    "수익보장",
+    "종목 추천",
+    "종목추천",
+    "리딩방",
+    "오픈채팅",
+    "텔레그램",
+    "투자 권유",
 )
 
 # 스팸 휴리스틱 — 댓글에 포함 시 무응답
 SPAM_KEYWORDS: tuple[str, ...] = (
-    "리딩방", "오픈채팅", "수익 보장", "수익보장", "무료 체험", "무료체험",
-    "종목 추천방", "카톡", "광고", "홍보",
+    "리딩방",
+    "오픈채팅",
+    "수익 보장",
+    "수익보장",
+    "무료 체험",
+    "무료체험",
+    "종목 추천방",
+    "카톡",
+    "광고",
+    "홍보",
 )
 
 # 스팸 계정 휴리스틱
@@ -181,17 +197,21 @@ REPLY_RETRY_WINDOW_HOURS: int = env_int("REPLY_RETRY_WINDOW_HOURS", 24)
 # ⚠️ 기본 비활성(opt-in). P-1(2026-08-18)은 실사고 대응 방어선이다:
 #    내가 타인 글에 축하 댓글 → 글 주인이 "축하해주셔서 감사합니다" 답글 →
 #    봇이 "축하해주셔서 진심으로 감사합니다"로 미러링한 주객전도 사고.
-#    근본 원인은 원글 컨텍스트 부재이며 해당 패치(v1.1.0 원글 주입)는 아직 미반영이다.
-#    따라서 이 값을 true로 켜면 그 사고 시나리오가 다시 열린다.
+#    v2에서는 부모/루트 작성자를 구분하고 부모 작성자를 추가 검증한다.
+#    활성화 전에는 원문 기반 역할 반전 검수가 필요하다.
 #    GATE_ECHO가 어휘 중복은 잡지만("축하해주셔서..." 재현 시 차단 실측 확인),
 #    의미 역전("축하드려요! 🎉")은 통과하므로 2차 방어선은 불완전하다.
 REPLY_FOREIGN_THREAD_ENABLED: bool = env_bool("REPLY_FOREIGN_THREAD_ENABLED", False)
-REPLY_FOREIGN_THREAD_RUN_CAP: int = env_int("REPLY_FOREIGN_THREAD_RUN_CAP", 1)
+REPLY_FOREIGN_THREAD_RUN_CAP: int = env_int_clamped("REPLY_FOREIGN_THREAD_RUN_CAP", 1, 1, 3)
+
+# Link-bearing comments can be reviewed in context; opt-in until offline quality review.
+REPLY_LINK_REVIEW_ENABLED: bool = env_bool("REPLY_LINK_REVIEW_ENABLED", False)
 
 
 # ---------------------------------------------------------------------------
 # 환경변수 판독 헬퍼
 # ---------------------------------------------------------------------------
+
 
 def is_enabled() -> bool:
     """긴급 정지 스위치. REPLY_ENABLED가 정확히 'true'일 때만 동작."""
@@ -224,6 +244,7 @@ def get_cost_per_call() -> tuple[float | None, float | None]:
     """
     (읽기 단가, 쓰기 단가). 미설정/파싱 불가 시 None → count 모드 fallback.
     """
+
     def _parse(name: str) -> float | None:
         raw = os.environ.get(name, "").strip()
         if not raw:

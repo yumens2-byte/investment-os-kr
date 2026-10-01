@@ -15,9 +15,7 @@ REQUIRED_TABLE_CONTRACTS = {
         "error_message,dry_run,mode,created_at"
     ),
     "kr_reply_cursor": "account,since_id,my_user_id,updated_at",
-    "kr_reply_budget": (
-        "budget_date,read_calls,write_calls,gemini_calls,est_cost_krw,updated_at"
-    ),
+    "kr_reply_budget": ("budget_date,read_calls,write_calls,gemini_calls,est_cost_krw,updated_at"),
     "kr_reply_blacklist": "author_id",
 }
 
@@ -96,17 +94,13 @@ def audit_reply_db(
         if bool(row.get("responded")) != bool(row.get("response_tweet_id"))
     ]
     response_counts = Counter(
-        str(row["response_tweet_id"])
-        for row in history
-        if row.get("response_tweet_id")
+        str(row["response_tweet_id"]) for row in history if row.get("response_tweet_id")
     )
     duplicate_responses = [key for key, count in response_counts.items() if count > 1]
     invalid_live = [
         str(row.get("reply_tweet_id"))
         for row in history
-        if row.get("mode") == "live"
-        and not row.get("responded")
-        and not row.get("skip_reason")
+        if row.get("mode") == "live" and not row.get("responded") and not row.get("skip_reason")
     ]
     grace_cutoff = datetime.now(UTC) - timedelta(minutes=max(0, terminal_grace_minutes))
     stale_invalid_live = [
@@ -126,6 +120,17 @@ def audit_reply_db(
     ):
         report["issues"][name] = len(values)
         report["samples"][name] = values[:10]
+
+    # Individual unknown outcomes require review, but do not disable all other replies.
+    unresolved = [
+        str(row.get("reply_tweet_id"))
+        for row in history
+        if row.get("mode") == "live"
+        and row.get("skip_reason") in {"PUBLISHING", "PUBLISH_UNKNOWN", "DB_CONFIRM_FAIL"}
+        and not row.get("response_tweet_id")
+    ]
+    report["issues"]["unresolved_publications"] = len(unresolved)
+    report["samples"]["unresolved_publications"] = unresolved[:10]
 
     # 상태 불일치와 response ID 중복은 중복 발행/캡 누락으로 이어지는 치명적 이상이다.
     if state_mismatch or duplicate_responses or stale_invalid_live:

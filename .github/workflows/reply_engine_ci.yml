@@ -1,0 +1,43 @@
+name: Reply Engine CI
+
+on:
+  pull_request:
+    paths:
+      - "reply_engine/**"
+      - "run_reply.py"
+      - "core/gemini_gateway.py"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/reply_engine*.yml"
+  push:
+    branches: ["feat/reply-engine-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      REPLY_ENABLED: "false"
+      REPLY_MODE: dry_run
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        run: pip install -r requirements.txt pytest==9.1.1 ruff==0.16.10
+      - name: Reply static checks
+        run: ruff check run_reply.py reply_engine core/gemini_gateway.py tests/test_reply_v2.py
+      - name: Full unit suite
+        run: python -m pytest -q tests/ --junitxml=unit-results.xml
+      - name: Upload unit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reply-unit-results
+          path: unit-results.xml
+          retention-days: 14

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 
 from reply_engine.config import (
     BANNED_WORDS,
@@ -26,14 +27,12 @@ from reply_engine.config import (
     REPLY_SIMILARITY_THRESHOLD,
 )
 
-VERSION = "1.1.1"
+VERSION = "2.0.0"
 
 logger = logging.getLogger(__name__)
 
 # 비허용 스크립트: 가나(일) / CJK 한자 / 키릴 / 태국 / 아랍
-_NON_KR_PATTERN = re.compile(
-    r"[\u3040-\u30ff\u4e00-\u9fff\u0400-\u04ff\u0e00-\u0e7f\u0600-\u06ff]"
-)
+_NON_KR_PATTERN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u0400-\u04ff\u0e00-\u0e7f\u0600-\u06ff]")
 
 _FORMAT_PATTERN = re.compile(r"#|https?://|t\.co/|@\w+", re.IGNORECASE)
 
@@ -42,7 +41,7 @@ _FORMAT_PATTERN = re.compile(r"#|https?://|t\.co/|@\w+", re.IGNORECASE)
 # 인사 관용구("좋은 하루 되세요", "~보내세요")는 매칭되지 않도록 패턴 한정.
 # 주의: "행복하세요" 류 기원문도 탈락하나, 무응답은 안전한 방향이므로 허용 손실로 간주.
 _IMPERATIVE_PATTERN = re.compile(
-    r"(해\s?보세요|해\s?주세요|해\s?주시길|하세요|하십시오|바랍니다|해야\s?합니다)"
+    r"(해\s?보세요|해\s?주세요|해\s?주시길|(?<!행복)하세요|하십시오|바랍니다|해야\s?합니다|가보시죠|가시죠)"
 )
 
 # P-2 (2026-08-18): 에코 게이트 정규화 — 멘션/비문자(이모지·구두점·공백) 제거 후 비교
@@ -54,8 +53,18 @@ ECHO_SIMILARITY_THRESHOLD: float = 0.5
 # 임계 0.5에 걸려 오탈락한 실측 사례의 해소책. 에코 게이트의 본래 목적은
 # 상황어(축하/반갑 등) 미러링 차단이므로, 상투어를 걷어낸 "잔여"끼리만 비교한다.
 _COURTESY_TOKENS: tuple[str, ...] = (
-    "감사드립니다", "감사드려요", "감사합니다", "감사해요", "감사",
-    "고맙습니다", "고마워요", "저야말로", "진심으로", "정말", "너무", "항상",
+    "감사드립니다",
+    "감사드려요",
+    "감사합니다",
+    "감사해요",
+    "감사",
+    "고맙습니다",
+    "고마워요",
+    "저야말로",
+    "진심으로",
+    "정말",
+    "너무",
+    "항상",
 )
 
 
@@ -106,6 +115,14 @@ def check_reply(
     if len(text) > REPLY_MAX_LENGTH:
         return False, "GATE_LENGTH"
 
+    emoji_count = sum(0x1F000 <= ord(ch) <= 0x1FAFF or 0x2600 <= ord(ch) <= 0x27BF for ch in text)
+    if emoji_count > 1:
+        return False, "GATE_EMOJI"
+    if "\n" in text or "\r" in text:
+        return False, "GATE_FORMAT"
+    if any(unicodedata.category(ch) == "Cf" and ch not in {"\u200d"} for ch in text):
+        return False, "GATE_FORMAT"
+
     if _NON_KR_PATTERN.search(text):
         return False, "GATE_NON_KR"
 
@@ -113,11 +130,18 @@ def check_reply(
         if word in text:
             return False, "GATE_BANNED_WORD"
 
+    if "?" in text or "？" in text:
+        return False, "GATE_QUESTION"
+
+    if re.search(
+        r"(?:수익|상승|하락).*(?:확실|보장)|(?:같이|함께).*(?:가보|가시|사시)|확인했습니다|수정했습니다|저도.*(?:놀랐|경험)",
+        text,
+    ):
+        return False, "GATE_UNSUPPORTED"
+
     if _IMPERATIVE_PATTERN.search(text):
         return False, "GATE_IMPERATIVE"
 
-    if "?" in text or "？" in text:
-        return False, "GATE_QUESTION"
 
     if comment_text:
         # F-1: 상투어를 걷어낸 상황어 잔여끼리 비교.
