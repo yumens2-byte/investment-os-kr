@@ -87,3 +87,12 @@ reply 본 실행·사전 검사·베타에서 전용 GitHub Secret `SUPABASE_REP
 등록 후 기존 X Reply Engine을 dry_run으로 실행해 DB 사전 검사 artifact의 `optional_schema_errors={}`와 정상 정합성을 확인한다. 이후 신규 적격 댓글에서 실제 X 발행·response ID 저장을 확인한다. 좋아요 활성화는 이번 변경에 포함되지 않는다.
 
 완료: 코드 수정, 3개 독립 AI 리뷰, 전체 660개 테스트, 실제 댓글 6건 생성·gate·직접 의미 검토, 운영 반영·재생·dry/live 베타, 오류 원인 확정. 미완료: 서버 키 직접 등록 및 그 키의 실제 API 조회 검증, 신규 적격 댓글 실발행 검증, 운영 표본 누적에 따른 스킵 감소율.
+
+
+## 기존 키 권한 부여 후 재검증 — 2026-10-02 10:23 KST
+
+사용자는 기존 SUPABASE_KEY 유지와 Supabase 권한 직접 부여를 선택했다. 직접 DB 검사에서 anon SELECT=true, INSERT=true가 확인됐다. RLS=true, 정책 0개다. 서버 키 등록은 기존 키 사용 선택에 따라 필수 후속 작업으로 두지 않는다. 앞선 서버 키 등록 안내는 이전 해결안의 기록이다.
+
+허용 RLS 정책이 없는 상태이므로 GRANT만으로 좋아요 이력 등록이 완성되지는 않는다. 운영 API의 읽기 전용 probe를 다시 실행하여 테이블 권한 오류 해소와 실제 등록 가능 여부를 구분한다. 좋아요 활성화 설정은 변경하지 않는다.
+
+anon 역할의 트랜잭션 내 INSERT 검사에서 SQLSTATE 42501 / new row violates row-level security policy로 거부됨을 확인했다. 검사 행은 저장되지 않았다.
