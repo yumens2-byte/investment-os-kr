@@ -96,3 +96,7 @@ reply 본 실행·사전 검사·베타에서 전용 GitHub Secret `SUPABASE_REP
 허용 RLS 정책이 없는 상태이므로 GRANT만으로 좋아요 이력 등록이 완성되지는 않는다. 운영 API의 읽기 전용 probe를 다시 실행하여 테이블 권한 오류 해소와 실제 등록 가능 여부를 구분한다. 좋아요 활성화 설정은 변경하지 않는다.
 
 anon 역할의 트랜잭션 내 INSERT 검사에서 SQLSTATE 42501 / new row violates row-level security policy로 거부됨을 확인했다. 검사 행은 저장되지 않았다.
+
+[권한 부여 후 운영 읽기 검증 36950864167](https://github.com/yumens2-byte/investment-os-kr/actions/runs/36950864167): 성공. 전체 660건 테스트 통과(15.50초), 운영 anon 키 그대로 사용, 연결 프로젝트 일치, schema_errors/optional_schema_errors/error_codes 모두 빈 값, 123행 이력 정합성 정상. 좋아요 테이블 조회의 기존 권한 거부는 해소됐다. 이 검사는 SELECT 계약만 확인하므로 RLS INSERT 차단이 해결됐다는 의미는 아니다. 직접 등록 검사에서는 RLS 거부를 확인했고, 검사 행 0건·테이블 총 0행을 재확인했다.
+
+현재 잔여: 기존 anon 키로 좋아요 이력을 등록하려면 접근 범위를 정한 RLS 정책 또는 별도 인증이 필요하다. 좋아요 활성화를 완료로 판단하지 않는다. 신규 댓글 실제 발행과 스킵 감소율 측정도 남아 있다.
