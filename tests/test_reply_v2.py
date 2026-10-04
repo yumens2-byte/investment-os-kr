@@ -551,7 +551,7 @@ def test_postgrest_sdk_serializes_atomic_claim_filters(monkeypatch):
     assert dict(write.url.params) == {
         "reply_tweet_id": "eq.x",
         "mode": "eq.live",
-        "responded": "eq.False",
+        "responded": "eq.false",
         "response_tweet_id": "is.null",
         "skip_reason": "is.null",
     }
