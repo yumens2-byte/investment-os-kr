@@ -12,7 +12,8 @@ yfinance>=0.2.40
 tweepy>=4.14.0
 
 # 데이터베이스 — Supabase
-supabase>=2.0.0
+# Pin the SDK family: 2.32.0 also pins postgrest/auth/storage/functions/realtime.
+supabase==2.32.0
 
 # HTTP (텔레그램 Bot API 포함)
 requests>=2.31.0
