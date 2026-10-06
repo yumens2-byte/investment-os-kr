@@ -143,7 +143,7 @@ jobs:
       - name: Audit fb_reply_* tables
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}  # 마스터 결정(2026-10-07): 기존 anon 키 사용
         run: python -m scripts.check_fb_reply_db
       - name: Upload audit
         if: always()
@@ -199,7 +199,7 @@ jobs:
       - name: Cross-check FB Supabase schema
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}  # 마스터 결정(2026-10-07): 기존 anon 키 사용
           FACE_REPLY_ENABLED_RAW: ${{ vars.FACE_REPLY_ENABLED }}
         run: |
           normalized="$(printf '%s' "$FACE_REPLY_ENABLED_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
@@ -216,7 +216,7 @@ jobs:
           FACE_PAGE_TOKEN: ${{ secrets.FACE_PAGE_TOKEN }}
 
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}  # 마스터 결정(2026-10-07): 기존 anon 키 사용
 
           # Gemini 무료 3키만 주입 (유료 PAY 키 미주입 — 코드도 allow_paid=False)
           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
