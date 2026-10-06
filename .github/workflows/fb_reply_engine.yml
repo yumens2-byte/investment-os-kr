@@ -1,0 +1,259 @@
+name: FB Reply Engine
+
+# ──────────────────────────────────────────────────────────────
+# v1.0.0 (2026-10-07, FB-1)
+# ──────────────────────────────────────────────────────────────
+# Facebook Page 댓글 자동 호응 답글 (run_fb_reply.py) — X Reply Engine과 공통 판단 로직 사용
+#
+# [X와 분리]  concurrency group / 테이블 fb_reply_* / 변수 FACE_* / artifact fb-reply-*
+# [제어 — GitHub Variables]
+#   FACE_REPLY_ENABLED : 'true'가 아니면 코드가 즉시 종료 (긴급 정지)
+#   FACE_REPLY_MODE    : dry_run | shadow | live (단계 전환은 마스터 수동)
+#   FACE_REPLY_*       : 상한·범위 (미등록 시 코드 기본값)
+# [Secrets]  FACE_PAGE_ID · FACE_PAGE_TOKEN (investment-os와 동일 이름)
+#   GEMINI_API_SUB_PAY_KEY(유료)·공개 채널 ID·X 키는 주입하지 않는다.
+# [task]  run(기본) | preflight(읽기 전용 Graph 실측) | db_check(FB 테이블 계약 점검)
+# [모드 우선순위] dispatch input > vars.FACE_REPLY_MODE > 'dry_run'
+# [cron] KST 11:38 / 14:38 / 20:38 / 23:38 — X(:17)·collect(:47)와 비중첩
+# ──────────────────────────────────────────────────────────────
+
+"on":
+  schedule:
+    - cron: "38 2,5,11,14 * * *"
+
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "실행 작업"
+        type: choice
+        options: [run, preflight, db_check]
+        default: run
+      mode:
+        description: "실행 모드 (미지정 시 vars.FACE_REPLY_MODE)"
+        type: choice
+        options: [dry_run, shadow, live]
+        default: dry_run
+      confirm_live:
+        description: "수동 live 실행 확인 (live 선택 시 필수)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fb-reply-engine
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────
+  # Job 1: 테스트 게이트 (X·FB 전수 — 공통 모듈 회귀 동시 검증)
+  # ─────────────────────────────────────────
+  test:
+    name: Run Tests (X + FB)
+    outputs:
+      runtime_sha: ${{ steps.runtime.outputs.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      REPLY_ENABLED: "false"
+      FACE_REPLY_ENABLED: "false"
+    steps:
+      - name: Validate approved runtime ref
+        id: runtime
+        env:
+          RUNTIME_REF: ${{ vars.FACE_REPLY_RELEASE_SHA || github.sha }}
+        run: |
+          [[ "$RUNTIME_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release SHA"; exit 1; }
+          echo "REPLY_RUNTIME_SHA=$RUNTIME_REF" >> "$GITHUB_ENV"
+          echo "sha=$RUNTIME_REF" >> "$GITHUB_OUTPUT"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REPLY_RUNTIME_SHA }}
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-reply.lock
+      - name: Install dependencies
+        run: pip install -r requirements-reply.lock
+      - name: Static checks
+        run: ruff check run_fb_reply.py run_reply.py reply_engine scripts/check_fb_reply_db.py scripts/fb_reply_preflight.py tests/test_fb_reply_common.py tests/test_fb_reply_client.py tests/test_fb_reply_pipeline.py tests/test_fb_reply_preflight.py
+      - name: Run pytest
+        run: pytest -q tests/
+
+  # ─────────────────────────────────────────
+  # Job 2: 읽기 전용 Preflight (수동 전용, DB·발행 없음)
+  # ─────────────────────────────────────────
+  preflight:
+    name: Graph Preflight (read-only)
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'preflight'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      REPLY_RUNTIME_SHA: ${{ needs.test.outputs.runtime_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.test.outputs.runtime_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-reply.lock
+      - run: pip install -r requirements-reply.lock
+      - name: Run preflight
+        env:
+          FACE_PAGE_ID: ${{ secrets.FACE_PAGE_ID }}
+          FACE_PAGE_TOKEN: ${{ secrets.FACE_PAGE_TOKEN }}
+        run: python -m scripts.fb_reply_preflight
+      - name: Upload preflight report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb-reply-preflight-${{ github.run_id }}
+          path: logs/fb_reply_preflight.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────
+  # Job 3: FB 테이블 계약 점검 (수동 전용, 읽기 전용)
+  # ─────────────────────────────────────────
+  db_check:
+    name: FB DB contract check
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.task == 'db_check'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      REPLY_RUNTIME_SHA: ${{ needs.test.outputs.runtime_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.test.outputs.runtime_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-reply.lock
+      - run: pip install -r requirements-reply.lock
+      - name: Audit fb_reply_* tables
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
+        run: python -m scripts.check_fb_reply_db
+      - name: Upload audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb-reply-db-audit-${{ github.run_id }}
+          path: logs/fb_reply_db_audit.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ─────────────────────────────────────────
+  # Job 4: FB Reply 파이프라인
+  # ─────────────────────────────────────────
+  reply:
+    name: FB Reply Pipeline
+    needs: test
+    if: github.event_name == 'schedule' || inputs.task == 'run'
+    runs-on: ubuntu-latest
+    # 최악 지연 27분(시작 300초 + 첫 발행 600초 + 회당 상한 5건 × 180초) + 여유
+    timeout-minutes: 45
+    env:
+      # 이력 메타데이터 commit_sha = 실제 실행 코드 (감사추적, 리뷰 #6)
+      REPLY_RUNTIME_SHA: ${{ needs.test.outputs.runtime_sha }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.test.outputs.runtime_sha }}
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements-reply.lock
+      - name: Install dependencies
+        run: pip install -r requirements-reply.lock
+
+      - name: Validate live dispatch
+        env:
+          REQUESTED_MODE: ${{ inputs.mode || vars.FACE_REPLY_MODE || 'dry_run' }}
+          CONFIRM_LIVE: ${{ github.event.inputs.confirm_live }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          effective_mode="$REQUESTED_MODE"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$REQUESTED_MODE" == "live" && "$CONFIRM_LIVE" != "true" ]]; then
+            echo "::warning::confirm_live가 확인되지 않아 live 대신 dry_run으로 안전 전환합니다."
+            effective_mode="dry_run"
+          fi
+          echo "FACE_REPLY_MODE=$effective_mode" >> "$GITHUB_ENV"
+          echo "requested_mode=$REQUESTED_MODE effective_mode=$effective_mode confirm_live=${CONFIRM_LIVE:-false}"
+
+      - name: Cross-check FB Supabase schema
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
+          FACE_REPLY_ENABLED_RAW: ${{ vars.FACE_REPLY_ENABLED }}
+        run: |
+          normalized="$(printf '%s' "$FACE_REPLY_ENABLED_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+          if [[ "$normalized" == "true" ]]; then
+            python -m scripts.check_fb_reply_db
+          else
+            echo "### FB Reply Engine disabled" >> "$GITHUB_STEP_SUMMARY"
+            echo "DB preflight skipped because the kill switch is not enabled." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run FB Reply Engine
+        env:
+          FACE_PAGE_ID:    ${{ secrets.FACE_PAGE_ID }}
+          FACE_PAGE_TOKEN: ${{ secrets.FACE_PAGE_TOKEN }}
+
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
+
+          # Gemini 무료 3키만 주입 (유료 PAY 키 미주입 — 코드도 allow_paid=False)
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_SUB_KEY:     ${{ secrets.GEMINI_API_SUB_KEY }}
+          GEMINI_API_SUB_SUB_KEY: ${{ secrets.GEMINI_API_SUB_SUB_KEY }}
+
+          FACE_REPLY_ENABLED:                 ${{ vars.FACE_REPLY_ENABLED }}
+          FACE_REPLY_DAILY_CAP:               ${{ vars.FACE_REPLY_DAILY_CAP }}
+          FACE_REPLY_RUN_CAP:                 ${{ vars.FACE_REPLY_RUN_CAP }}
+          FACE_REPLY_AUTHOR_DAILY_CAP:        ${{ vars.FACE_REPLY_AUTHOR_DAILY_CAP }}
+          FACE_REPLY_POST_DAILY_CAP:          ${{ vars.FACE_REPLY_POST_DAILY_CAP }}
+          FACE_REPLY_MAX_AGE_HOURS:           ${{ vars.FACE_REPLY_MAX_AGE_HOURS }}
+          FACE_REPLY_RETRY_WINDOW_HOURS:      ${{ vars.FACE_REPLY_RETRY_WINDOW_HOURS }}
+          FACE_REPLY_THREAD_ENABLED:          ${{ vars.FACE_REPLY_THREAD_ENABLED }}
+          FACE_REPLY_THREAD_RUN_CAP:          ${{ vars.FACE_REPLY_THREAD_RUN_CAP }}
+          FACE_REPLY_POST_LOOKBACK:           ${{ vars.FACE_REPLY_POST_LOOKBACK }}
+          FACE_REPLY_COMMENT_MAX_PAGES:       ${{ vars.FACE_REPLY_COMMENT_MAX_PAGES }}
+          FACE_REPLY_READ_CALLS_PER_DAY:      ${{ vars.FACE_REPLY_READ_CALLS_PER_DAY }}
+          FACE_REPLY_WRITE_CALLS_PER_DAY:     ${{ vars.FACE_REPLY_WRITE_CALLS_PER_DAY }}
+          FACE_REPLY_BUC_STOP_PCT:            ${{ vars.FACE_REPLY_BUC_STOP_PCT }}
+          FACE_REPLY_PUBLISH_DELAY_MAX_SEC:   ${{ vars.FACE_REPLY_PUBLISH_DELAY_MAX_SEC }}
+          FACE_REPLY_CURSOR_STALE_WARN_HOURS: ${{ vars.FACE_REPLY_CURSOR_STALE_WARN_HOURS }}
+
+          # 운영 장애 알림 — 관리자 전용 채팅만 (공개 채널 ID 미주입)
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: python run_fb_reply.py
+
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb-reply-report-${{ github.run_id }}
+          path: |
+            logs/fb_reply_report_*.json
+            logs/fb_reply_db_audit.json
+            logs/fb_reply_*.log
+            logs/fb_reply_events.jsonl
+          retention-days: 14
+          if-no-files-found: warn

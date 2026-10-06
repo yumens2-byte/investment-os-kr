@@ -5,12 +5,14 @@ on:
     paths:
       - "reply_engine/**"
       - "run_reply.py"
+      - "run_fb_reply.py"
       - "core/gemini_gateway.py"
       - "tests/**"
       - "requirements.txt"
       - "requirements-reply.lock"
       - "scripts/**"
       - ".github/workflows/reply_engine*.yml"
+      - ".github/workflows/fb_reply_engine.yml"
   push:
     branches: ["feat/reply-engine-*"]
 
@@ -36,6 +38,8 @@ jobs:
         run: ruff check run_reply.py reply_engine core/gemini_gateway.py tests/test_reply_v2.py tests/test_reply_review_safety.py tests/test_reply_review_quality.py tests/test_reply_sdk_integration.py tests/test_reply_beta.py tests/test_reply_quality_replay.py tests/test_check_reply_db.py scripts/reply_operational_beta.py scripts/reply_quality_replay.py tests/test_reply_db_audit_codes.py scripts/check_reply_db.py
       - name: New quality and collection static checks
         run: ruff check scripts/collect_reply.py scripts/reply_health.py tests/test_reply_quality_v21.py
+      - name: FB reply static checks (FB-1)
+        run: ruff check run_fb_reply.py scripts/check_fb_reply_db.py scripts/fb_reply_preflight.py tests/test_fb_reply_common.py tests/test_fb_reply_client.py tests/test_fb_reply_pipeline.py tests/test_fb_reply_preflight.py
       - name: Full unit suite
         run: python -m pytest -q tests/ --junitxml=unit-results.xml
       - name: Upload unit results
