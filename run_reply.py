@@ -199,6 +199,8 @@ def main() -> dict:
         "cursor_stale_hours": None,  # R-10: 커서 정체 시간 (0건 원인 구분용)
         "user_id_mismatch": False,  # R-10: 변수 vs 커서 캐시 불일치 경고
         "published": 0,
+        "actual_published": 0,
+        "simulated": 0,
         "likes": {"targets": 0, "liked": 0, "skipped": {}},
         "skip_reasons": {},
         "review": [],  # C-3: 건별 품질 검수 배열 / C-4(v1.2.1): 분류 스킵 건 포함
