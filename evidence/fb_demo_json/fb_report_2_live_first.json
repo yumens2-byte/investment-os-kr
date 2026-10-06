@@ -1,0 +1,218 @@
+{
+  "run_id": "bd054adacd48476f903991317a21ca26",
+  "run_attempt": "1",
+  "commit_sha": "unknown",
+  "platform": "facebook",
+  "journal_path": "logs/fb_reply_events.jsonl",
+  "version": "1.0.0",
+  "mode": "live",
+  "success": true,
+  "exit_reason": "EXIT_OK",
+  "collected": 7,
+  "posts_seen": 2,
+  "posts_skipped": 1,
+  "collection_pages": 2,
+  "collection_complete": true,
+  "collection_halt": null,
+  "buc_max_pct": null,
+  "cursor_advanced": true,
+  "already_processed": 0,
+  "candidates": 4,
+  "classified_pass": 3,
+  "non_kr_replies": 1,
+  "thread_replies": 0,
+  "cursor_stale_hours": null,
+  "page_id_mismatch": false,
+  "published": 1,
+  "actual_published": 1,
+  "simulated": 0,
+  "publish_halt": null,
+  "skip_reasons": {
+    "SELF": 1,
+    "OUT_OF_SCOPE": 1,
+    "SPAM_KEYWORD": 1,
+    "CLASS_QUESTION": 1,
+    "RUN_CAP": 2
+  },
+  "review": [
+    {
+      "reply_tweet_id": "c_self",
+      "origin": "new",
+      "comment_preview": "읽어주셔서 감사합니다",
+      "parent_preview": "오늘의 시장 정리",
+      "label": "AMBIGUOUS",
+      "reply_text": null,
+      "result": "SELF",
+      "thread_reply": false
+    },
+    {
+      "reply_tweet_id": "c_third",
+      "origin": "new",
+      "comment_preview": "축하해주셔서 감사합니다",
+      "parent_preview": "",
+      "label": "AMBIGUOUS",
+      "reply_text": null,
+      "result": "OUT_OF_SCOPE",
+      "thread_reply": false
+    },
+    {
+      "reply_tweet_id": "c_spam",
+      "origin": "new",
+      "comment_preview": "리딩방 무료 체험 카톡 문의주세요",
+      "parent_preview": "오늘의 시장 정리",
+      "label": "AMBIGUOUS",
+      "reply_text": null,
+      "result": "SPAM_KEYWORD",
+      "thread_reply": false
+    },
+    {
+      "reply_tweet_id": "c_q",
+      "origin": "new",
+      "comment_preview": "이 종목 지금 사도 될까요?",
+      "parent_preview": "오늘의 시장 정리",
+      "label": "QUESTION",
+      "reply_text": null,
+      "result": "CLASS_QUESTION",
+      "thread_reply": false
+    },
+    {
+      "reply_tweet_id": "c_ok",
+      "origin": "new",
+      "comment_preview": "오늘 정리 정말 유익했어요 감사합니다",
+      "parent_preview": "오늘의 시장 정리",
+      "label": "POSITIVE",
+      "reply_text": "저야말로 감사합니다",
+      "source": "AI",
+      "draft_gate_reason": null,
+      "thread_reply": false,
+      "result": "PUBLISHED"
+    },
+    {
+      "reply_tweet_id": "c_ok2",
+      "origin": "new",
+      "comment_preview": "ㅋㅋㅋ 오늘 장 미쳤네요",
+      "parent_preview": "오늘의 시장 정리",
+      "label": "POSITIVE",
+      "reply_text": null,
+      "source": null,
+      "draft_gate_reason": null,
+      "thread_reply": false,
+      "result": "RUN_CAP"
+    },
+    {
+      "reply_tweet_id": "c_en",
+      "origin": "new",
+      "comment_preview": "Great summary, thanks",
+      "parent_preview": "오늘의 시장 정리",
+      "label": "POSITIVE",
+      "reply_text": null,
+      "source": null,
+      "draft_gate_reason": null,
+      "thread_reply": false,
+      "result": "RUN_CAP"
+    }
+  ],
+  "history_metrics": {
+    "available": true,
+    "lookback_days": 7,
+    "history_rows": 0,
+    "responded": 0,
+    "response_rate": 0.0,
+    "metric_basis": "current_history_rows_by_mutable_created_at",
+    "eligible_response_rate": null,
+    "skip_reasons": {},
+    "truncated": false
+  },
+  "recovered_failures": 0,
+  "deferred": 2,
+  "model_usage": [
+    {
+      "api_calls": 1,
+      "measured": true,
+      "model": "gemini-2.5-flash-lite",
+      "paid": false,
+      "key_used": "main",
+      "attempts": [
+        {
+          "key": "main",
+          "model": "gemini-2.5-flash-lite",
+          "status": 200
+        }
+      ],
+      "tokens": {
+        "prompt_token_count": null,
+        "candidates_token_count": null,
+        "total_token_count": null
+      }
+    },
+    {
+      "api_calls": 1,
+      "measured": true,
+      "model": "gemini-2.5-flash-lite",
+      "paid": false,
+      "key_used": "main",
+      "attempts": [
+        {
+          "key": "main",
+          "model": "gemini-2.5-flash-lite",
+          "status": 200
+        }
+      ],
+      "tokens": {
+        "prompt_token_count": null,
+        "candidates_token_count": null,
+        "total_token_count": null
+      }
+    }
+  ],
+  "started_at": "2026-10-06T17:34:34.922902+00:00",
+  "expiry_maintenance": {
+    "checked": 0,
+    "expired": 0,
+    "conflicts": 0,
+    "invalid": 0,
+    "errors": 0,
+    "scan_saturated": false
+  },
+  "ready_orphans": 0,
+  "processed": 7,
+  "effective_run_cap": 1,
+  "publish_attempts": 1,
+  "funnel": {
+    "candidate_rate": 0.5714,
+    "classification_pass_rate": 0.75,
+    "publish_rate_of_processed": 0.1429,
+    "publish_rate_of_collected": 0.1429,
+    "publish_rate_of_pass": 0.3333
+  },
+  "cohorts": {
+    "new": {
+      "reviewed": 7,
+      "published": 1,
+      "simulated": 0
+    },
+    "recovered": {
+      "reviewed": 0,
+      "published": 0,
+      "simulated": 0
+    }
+  },
+  "finished_at": "2026-10-06T17:34:34.944010+00:00",
+  "budget": {
+    "mode": "count",
+    "read_calls": 2,
+    "write_calls": 1,
+    "gemini_calls": 2,
+    "est_cost_krw": 0.0,
+    "limit_krw": 0.0,
+    "read_cost_krw": null,
+    "write_cost_krw": null,
+    "config_warnings": [],
+    "run_delta": {
+      "read_calls": 2,
+      "write_calls": 1,
+      "gemini_calls": 2,
+      "est_cost_krw": 0.0
+    }
+  }
+}

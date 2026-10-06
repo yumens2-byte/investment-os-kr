@@ -1,0 +1,40 @@
+FB-1 패키지 매니페스트 (기준 main 352db47 → 브랜치 feat/fb-reply-engine c4b907a)
+
+[investment-os-kr_FB-1_code.zip] 32 files
+  f92df690c54c7af7  docs/FB_REPLY_ENGINE.md
+  00233a57e7e908a2  docs/sql/fb_reply_tables.sql
+  a71fc1981eaef068  reply_engine/budget.py
+  72a2c0a81da47637  reply_engine/config.py
+  9f731ecb9b40374b  reply_engine/db_audit.py
+  00a30594009d7bbc  reply_engine/facebook/__init__.py
+  08cfe2ba13780399  reply_engine/facebook/client.py
+  7f10f1ed4bc67ebc  reply_engine/facebook/config.py
+  62892ba69e7d6761  reply_engine/facebook/normalize.py
+  3c3242dca9d435b6  reply_engine/filter.py
+  a2903a9934573db0  reply_engine/generator.py
+  b40f780ffcf68bd3  reply_engine/store.py
+  a17246dd931ecd2c  reply_engine/telemetry.py
+  52955407de490c23  run_fb_reply.py
+  14bd70c8ee9ecac5  run_reply.py
+  1b463d2fcb60afcb  scripts/check_fb_reply_db.py
+  6357b367c03a179e  scripts/fb_reply_preflight.py
+  77fca221b7a6b529  tests/test_env_hardening.py
+  e161b278e6234a9f  tests/test_fb_reply_client.py
+  855204f0009aec56  tests/test_fb_reply_common.py
+  170395a30016b63c  tests/test_fb_reply_pipeline.py
+  0ca5b8ac1cb83af8  tests/test_fb_reply_preflight.py
+  ac20611dee01e469  tests/test_reply_domain_prompt.py
+  8e10d0fbf371725e  tests/test_reply_echo_fallback.py
+  e76a13670f319b61  tests/test_reply_hardening.py
+  479a036b9b724db1  tests/test_reply_like.py
+  599ace114f332b0d  tests/test_reply_ops_hardening.py
+  86bcf640a9f3b77f  tests/test_reply_publish_delay.py
+  0db3026b397e3485  tests/test_reply_quality.py
+  ef563218f0ff501c  tests/test_reply_scenarios.py
+  df2f60cad6ebe50c  tests/test_reply_scope_echo.py
+  92e282c11ce3f3ac  tests/test_reply_sdk_integration.py
+
+[investment-os-kr_FB-1_workflows.zip] 2 files
+  a2428019927a7fbe  .github/workflows/fb_reply_engine.yml
+  34bf003046776cf6  .github/workflows/reply_engine_ci.yml
+

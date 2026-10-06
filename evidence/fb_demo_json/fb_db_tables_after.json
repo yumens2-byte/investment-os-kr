@@ -1,0 +1,137 @@
+{
+  "fb_reply_budget": [
+    {
+      "created_at": "2026-10-06T17:34:34.938227+00:00",
+      "budget_date": "2026-10-07",
+      "read_calls": 4,
+      "write_calls": 2,
+      "gemini_calls": 4,
+      "est_cost_krw": 0.0,
+      "updated_at": "2026-10-06T17:34:34.962035+00:00"
+    }
+  ],
+  "fb_reply_history": [
+    {
+      "created_at": "2026-10-06T17:34:34.928404+00:00",
+      "reply_tweet_id": "c_self",
+      "conversation_id": "777_1",
+      "author_id": "777",
+      "author_username": "",
+      "comment_text": "읽어주셔서 감사합니다",
+      "classification": "AMBIGUOUS",
+      "responded": false,
+      "response_tweet_id": null,
+      "response_text": "",
+      "skip_reason": "SELF",
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T17:24:34+00:00\", \"comment_text\": \"읽어주셔서 감사합니다\", \"parent_text\": \"오늘의 시장 정리\", \"parent_id\": \"777_1\", \"parent_author_id\": \"777\", \"in_reply_to_user_id\": \"777\", \"account_user_id\": \"777\", \"publish_attempts\": 0, \"run_id\": \"bd054adacd48476f903991317a21ca26\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.927700+00:00\", \"platform\": \"facebook\", \"fb_thread\": false}"
+    },
+    {
+      "created_at": "2026-10-06T17:34:34.929571+00:00",
+      "reply_tweet_id": "c_third",
+      "conversation_id": "777_1",
+      "author_id": "u5",
+      "author_username": "",
+      "comment_text": "축하해주셔서 감사합니다",
+      "classification": "AMBIGUOUS",
+      "responded": false,
+      "response_tweet_id": null,
+      "response_text": "",
+      "skip_reason": "OUT_OF_SCOPE",
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T17:26:34+00:00\", \"comment_text\": \"축하해주셔서 감사합니다\", \"parent_text\": \"\", \"parent_id\": \"x\", \"parent_author_id\": \"u6\", \"in_reply_to_user_id\": \"\", \"account_user_id\": \"777\", \"publish_attempts\": 0, \"run_id\": \"bd054adacd48476f903991317a21ca26\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.928948+00:00\", \"platform\": \"facebook\", \"fb_thread\": false}"
+    },
+    {
+      "created_at": "2026-10-06T17:34:34.931054+00:00",
+      "reply_tweet_id": "c_spam",
+      "conversation_id": "777_1",
+      "author_id": "u7",
+      "author_username": "",
+      "comment_text": "리딩방 무료 체험 카톡 문의주세요",
+      "classification": "AMBIGUOUS",
+      "responded": false,
+      "response_tweet_id": null,
+      "response_text": "",
+      "skip_reason": "SPAM_KEYWORD",
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T17:29:34+00:00\", \"comment_text\": \"리딩방 무료 체험 카톡 문의주세요\", \"parent_text\": \"오늘의 시장 정리\", \"parent_id\": \"777_1\", \"parent_author_id\": \"777\", \"in_reply_to_user_id\": \"777\", \"account_user_id\": \"777\", \"publish_attempts\": 0, \"run_id\": \"bd054adacd48476f903991317a21ca26\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.929998+00:00\", \"platform\": \"facebook\", \"fb_thread\": false}"
+    },
+    {
+      "created_at": "2026-10-06T17:34:34.933625+00:00",
+      "reply_tweet_id": "c_q",
+      "conversation_id": "777_1",
+      "author_id": "u3",
+      "author_username": "",
+      "comment_text": "이 종목 지금 사도 될까요?",
+      "classification": "QUESTION",
+      "responded": false,
+      "response_tweet_id": null,
+      "response_text": "",
+      "skip_reason": "CLASS_QUESTION",
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T17:14:34+00:00\", \"comment_text\": \"이 종목 지금 사도 될까요?\", \"parent_text\": \"오늘의 시장 정리\", \"parent_id\": \"777_1\", \"parent_author_id\": \"777\", \"in_reply_to_user_id\": \"777\", \"account_user_id\": \"777\", \"publish_attempts\": 0, \"run_id\": \"bd054adacd48476f903991317a21ca26\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.932994+00:00\", \"platform\": \"facebook\", \"fb_thread\": false}"
+    },
+    {
+      "created_at": "2026-10-06T17:34:34.938453+00:00",
+      "reply_tweet_id": "c_ok",
+      "conversation_id": "777_1",
+      "author_id": "u1",
+      "author_username": "",
+      "comment_text": "오늘 정리 정말 유익했어요 감사합니다",
+      "classification": "POSITIVE",
+      "responded": true,
+      "skip_reason": null,
+      "response_text": "저야말로 감사합니다",
+      "response_tweet_id": "c_ok_r1",
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T16:54:34+00:00\", \"comment_text\": \"오늘 정리 정말 유익했어요 감사합니다\", \"parent_text\": \"오늘의 시장 정리\", \"parent_id\": \"777_1\", \"parent_author_id\": \"777\", \"in_reply_to_user_id\": \"777\", \"account_user_id\": \"777\", \"publish_attempts\": 1, \"run_id\": \"bd054adacd48476f903991317a21ca26\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.935940+00:00\", \"next_attempt_at\": \"2026-10-06T17:49:34.935944+00:00\", \"platform\": \"facebook\", \"fb_thread\": false}"
+    },
+    {
+      "created_at": "2026-10-06T17:34:34.959216+00:00",
+      "reply_tweet_id": "c_ok2",
+      "conversation_id": "777_1",
+      "author_id": "u2",
+      "author_username": "",
+      "comment_text": "ㅋㅋㅋ 오늘 장 미쳤네요",
+      "classification": "POSITIVE",
+      "responded": true,
+      "skip_reason": null,
+      "response_text": "댓글 잘 봤어요 🙂",
+      "response_tweet_id": "c_ok2_r2",
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T17:04:34+00:00\", \"comment_text\": \"ㅋㅋㅋ 오늘 장 미쳤네요\", \"parent_text\": \"오늘의 시장 정리\", \"parent_id\": \"777_1\", \"parent_author_id\": \"777\", \"in_reply_to_user_id\": \"777\", \"account_user_id\": \"777\", \"publish_attempts\": 1, \"run_id\": \"9dd5260b6d934f48b9555167a3fbdab1\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.957023+00:00\", \"platform\": \"facebook\", \"fb_thread\": false, \"next_attempt_at\": \"2026-10-06T17:49:34.957030+00:00\"}"
+    },
+    {
+      "created_at": "2026-10-06T17:34:34.942509+00:00",
+      "reply_tweet_id": "c_en",
+      "conversation_id": "777_1",
+      "author_id": "u4",
+      "author_username": "",
+      "comment_text": "Great summary, thanks",
+      "classification": "POSITIVE",
+      "responded": false,
+      "skip_reason": "RUN_CAP",
+      "response_text": "",
+      "response_tweet_id": null,
+      "dry_run": false,
+      "mode": "live",
+      "error_message": "{\"reply_policy\": \"2.1.0\", \"original_created_at\": \"2026-10-06T17:19:34+00:00\", \"comment_text\": \"Great summary, thanks\", \"parent_text\": \"오늘의 시장 정리\", \"parent_id\": \"777_1\", \"parent_author_id\": \"777\", \"in_reply_to_user_id\": \"777\", \"account_user_id\": \"777\", \"publish_attempts\": 0, \"run_id\": \"9dd5260b6d934f48b9555167a3fbdab1\", \"run_attempt\": \"\", \"commit_sha\": \"\", \"first_seen_at\": \"2026-10-06T17:34:34.925593+00:00\", \"user_snapshot\": null, \"last_decision_at\": \"2026-10-06T17:34:34.959785+00:00\", \"platform\": \"facebook\", \"fb_thread\": false, \"classification_attempts\": 0, \"first_recorded_at\": \"2026-10-06T17:34:34.942509+00:00\", \"previous_reason\": \"RUN_CAP\"}"
+    }
+  ],
+  "fb_reply_cursor": [
+    {
+      "created_at": "2026-10-06T17:34:34.943222+00:00",
+      "account": "fb_main",
+      "since_id": "2026-10-06T17:29:34+00:00",
+      "my_user_id": "777",
+      "updated_at": "2026-10-06T17:34:34.961602+00:00"
+    }
+  ],
+  "fb_reply_blacklist": []
+}

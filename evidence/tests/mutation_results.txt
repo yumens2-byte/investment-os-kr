@@ -1,0 +1,24 @@
+M1 store bulk가 X 테이블 사용 | KILLED | 1 failed, 7 passed in 0.92s
+M2 claim 없이 발행 | KILLED | 1 failed in 1.31s
+M3 스로틀을 결과불명으로 | KILLED | 1 failed, 12 passed in 0.91s
+M4 X 페르소나 1바이트 변경 | KILLED | 1 failed in 0.55s
+M5 caps 무시 | KILLED | 1 failed, 11 passed in 0.62s
+M6 제3자 대댓글을 범위 안으로 | KILLED | 1 failed, 10 passed in 0.77s
+M7 기처리 제외 제거 | KILLED | 1 failed, 7 passed in 1.15s
+M8 FB 예산 주입 무시 | KILLED | 1 failed, 13 passed in 0.47s
+M9 결과불명에도 예약 반환 | KILLED | 1 failed, 20 passed in 1.49s
+M10 토큰 마스킹 제거 | KILLED | 1 failed, 32 passed in 0.75s
+M11 retry 시간창이 FB 설정 무시 | KILLED | 1 failed, 9 passed in 0.59s
+M12 방문자 게시물 허용 | KILLED | 1 failed, 36 passed in 0.74s
+M13 X 기본 테이블 오배선 | KILLED | 1 failed, 75 passed in 2.65s
+M14 halt 미적용(368 후 계속 발행) | KILLED | 1 failed, 12 passed in 1.29s
+M15 [리뷰#1] 미재수집 복구건 범위 재판정 제거 | KILLED | 1 failed, 21 passed in 1.33s
+M16 [리뷰#1] 재수집 복구건 사전스킵 무시 | KILLED | 1 failed, 22 passed in 1.71s
+M17 [리뷰#2] 수집 BUC 정지 미적용 | KILLED | 1 failed, 23 passed in 1.65s
+M18 [리뷰#5] AUTH 영구거절 회귀 | KILLED | 1 failed, 18 passed in 0.95s
+M19 [리뷰#8] READY 고아 복구 제거 | KILLED | 1 failed, 26 passed in 1.89s
+M20 [리뷰#3] Preflight 권한오류 미차단 | KILLED | 1 failed, 1 passed in 0.65s
+M21 [리뷰#4] 341 스로틀 누락 | KILLED | 1 failed, 17 passed in 0.61s
+M22 Preflight 오류 무시 | KILLED | 1 failed, 2 passed in 0.56s
+M23 [2차 N1] shadow가 live 고아 재평가 | KILLED | 1 failed, 33 passed in 1.80s
+survived: 0

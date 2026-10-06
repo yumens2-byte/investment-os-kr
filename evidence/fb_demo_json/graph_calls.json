@@ -1,0 +1,20 @@
+{
+  "gets": [
+    "https://graph.facebook.com/v25.0/777/feed",
+    "https://graph.facebook.com/v25.0/777_1/comments",
+    "https://graph.facebook.com/v25.0/777/feed",
+    "https://graph.facebook.com/v25.0/777_1/comments",
+    "https://graph.facebook.com/v25.0/777/feed",
+    "https://graph.facebook.com/v25.0/777_1/comments"
+  ],
+  "posts": [
+    [
+      "c_ok",
+      "저야말로 감사합니다"
+    ],
+    [
+      "c_ok2",
+      "댓글 잘 봤어요 🙂"
+    ]
+  ]
+}

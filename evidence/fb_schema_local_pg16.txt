@@ -1,0 +1,28 @@
+fb_reply_blacklist.author_id:text:NO:
+fb_reply_blacklist.username:text:YES:
+fb_reply_blacklist.reason:text:YES:
+fb_reply_blacklist.created_at:timestamp with time zone:NO:now()
+fb_reply_budget.budget_date:date:NO:
+fb_reply_budget.read_calls:integer:NO:0
+fb_reply_budget.write_calls:integer:NO:0
+fb_reply_budget.gemini_calls:integer:NO:0
+fb_reply_budget.est_cost_krw:numeric:NO:0
+fb_reply_budget.updated_at:timestamp with time zone:NO:now()
+fb_reply_cursor.account:text:NO:
+fb_reply_cursor.since_id:text:NO:
+fb_reply_cursor.my_user_id:text:YES:
+fb_reply_cursor.updated_at:timestamp with time zone:NO:now()
+fb_reply_history.reply_tweet_id:text:NO:
+fb_reply_history.conversation_id:text:YES:
+fb_reply_history.author_id:text:NO:
+fb_reply_history.author_username:text:YES:
+fb_reply_history.comment_text:text:YES:
+fb_reply_history.classification:character varying:NO:
+fb_reply_history.responded:boolean:NO:false
+fb_reply_history.skip_reason:character varying:YES:
+fb_reply_history.response_text:text:YES:
+fb_reply_history.response_tweet_id:text:YES:
+fb_reply_history.dry_run:boolean:NO:
+fb_reply_history.mode:character varying:NO:
+fb_reply_history.created_at:timestamp with time zone:NO:now()
+fb_reply_history.error_message:text:YES:
