@@ -52,7 +52,7 @@ from pathlib import Path
 
 from core.alert import send_admin_alert
 from reply_engine import budget as budget_mod
-from reply_engine import classifier, gate, generator, lang, store, x_client
+from reply_engine import classifier, gate, generator, lang, store, telemetry, x_client
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     MENTIONS_MAX_PAGES,
@@ -70,6 +70,8 @@ from reply_engine.config import (
     REPLY_RECENT_COMPARE_COUNT,
     REPLY_RUN_CAP,
     STARTUP_JITTER_MAX_SEC,
+    env_bool,
+    env_int_clamped,
     get_mode,
     get_my_user_id,
     is_enabled,
@@ -82,7 +84,7 @@ from reply_engine.policy import (
     encode_metadata,
 )
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -117,7 +119,9 @@ def _write_report(summary: dict, guard=None) -> None:
     processed = int(summary.get("processed", collected) or 0)
     candidates = int(summary.get("candidates") or 0)
     classified_pass = int(summary.get("classified_pass") or 0)
-    published = int(summary.get("published") or 0)
+    published = int(summary.get("actual_published", summary.get("published")) or 0)
+    if summary.get("mode") in {"dry_run", "shadow"}:
+        published = 0
     summary["funnel"] = {
         "candidate_rate": round(candidates / processed, 4) if processed else 0.0,
         "classification_pass_rate": (round(classified_pass / candidates, 4) if candidates else 0.0),
@@ -128,6 +132,17 @@ def _write_report(summary: dict, guard=None) -> None:
             else None
         ),
         "publish_rate_of_pass": round(published / classified_pass, 4) if classified_pass else 0.0,
+    }
+    review = summary.get("review", [])
+    summary["cohorts"] = {
+        origin: {
+            "reviewed": sum(r.get("origin") == origin for r in review),
+            "published": sum(r.get("origin") == origin and r.get("result") in {
+                "PUBLISHED", "PUBLISHED_DB_UNCONFIRMED"
+            } for r in review),
+            "simulated": sum(r.get("origin") == origin and r.get("result") == "SIMULATED"
+                             for r in review),
+        } for origin in ("new", "recovered")
     }
     summary["finished_at"] = datetime.now(UTC).isoformat()
     if guard is not None:
@@ -167,6 +182,7 @@ def main() -> dict:
     logger.info(f"[ReplyEngine] v{VERSION} 시작 | mode={mode}")
 
     summary: dict = {
+        **telemetry.new_run(),
         "version": VERSION,
         "mode": mode,
         "success": False,
@@ -196,6 +212,7 @@ def main() -> dict:
     def _skip(tweet_id: str, reason: str) -> None:
         summary["skip_reasons"][reason] = summary["skip_reasons"].get(reason, 0) + 1
         logger.info(f"[Skip] {tweet_id}: {reason}")
+        telemetry.event(summary, reason, tweet_id)
 
     # ── Step 0: 게이트 ────────────────────────────────────────
     if not is_enabled():
@@ -284,6 +301,11 @@ def main() -> dict:
             _write_report(summary, guard)
             return summary
 
+    if mode == "live":
+        summary["expiry_maintenance"] = store.expire_deferred(my_user_id)
+        if summary["expiry_maintenance"].get("errors"):
+            send_admin_alert("Reply deferred expiry maintenance failed; see run report")
+
     # 운영 기본 경로는 DB의 당일 예산 잔여량 안에서만 추가 페이지를 읽는다.
     # 대화 루트 소유자 검증 1콜을 남겨 수집만 성공하고 전건 미검증 스킵되는 상황을 막는다.
     # 테스트/통합 코드가 레거시 3-인자 함수를 교체한 경우에는 기존 규약을 보존한다.
@@ -312,6 +334,10 @@ def main() -> dict:
 
     tweets = fetched["tweets"]
     users = fetched["users"]
+    seen_at = datetime.now(UTC).isoformat()
+    for tweet in tweets:
+        tweet.update(_run_id=summary["run_id"], _first_seen_at=seen_at,
+                     _user_snapshot=users.get(tweet["author_id"]))
     retry_rows = store.get_retryable_history(100) if mode == "live" else []
     summary["collected"] = len(tweets)
     summary["collection_saturated"] = bool(fetched.get("saturated", False))  # R-3
@@ -415,12 +441,17 @@ def main() -> dict:
                 "parent_author_id": meta.get("parent_author_id", ""),
                 "_metadata": meta,
                 "_retry": True,
+                "_run_id": summary["run_id"],
                 "_stored_response_text": row.get("response_text") or "",
             }
         )
         current_ids.add(tid)
+        snapshot = meta.get("user_snapshot")
+        if isinstance(snapshot, dict):
+            users.setdefault(str(row.get("author_id") or ""), snapshot)
     # Oldest first; a bounded queue query prevents unbounded work per invocation.
-    tweets.sort(key=lambda t: str(t.get("created_at") or ""))
+    tweets.sort(key=lambda t: store.parse_utc(t.get("created_at"))
+                or datetime.min.replace(tzinfo=UTC))
     summary["recovered_failures"] = sum(bool(t.get("_retry")) for t in tweets)
     summary["processed"] = len(tweets)
 
@@ -431,6 +462,7 @@ def main() -> dict:
         summary["review"].append(
             {
                 "reply_tweet_id": tweet["id"],
+                "origin": "recovered" if tweet.get("_retry") else "new",
                 "comment_preview": tweet["text"][:100],
                 "parent_preview": tweet.get("parent_text", "")[:160],
                 "label": label,
@@ -587,6 +619,16 @@ def main() -> dict:
     logger.info(f"[Step4] 분류 통과 {len(pass_items)}건")
     summary["classified_pass"] = len(pass_items)
 
+    run_cap = REPLY_RUN_CAP
+    if env_bool("REPLY_URGENT_DRAIN_ENABLED", False) and any(
+        (original := store.parse_utc(t.get("created_at"))) is not None
+        and timedelta(hours=max(0, filter_mod.REPLY_MAX_AGE_HOURS - 6))
+        <= datetime.now(UTC) - original < timedelta(hours=filter_mod.REPLY_MAX_AGE_HOURS)
+        for t in pass_items
+    ):
+        run_cap = max(run_cap, env_int_clamped("REPLY_URGENT_RUN_CAP", 4, 1, 10))
+    summary["effective_run_cap"] = run_cap
+
     # ── Step 5: 생성 ──────────────────────────────────────────
     replies: dict[str, str] = {}
     reply_sources: dict[str, str] = {}
@@ -639,7 +681,7 @@ def main() -> dict:
         draft_gate_reason = None
         reserved = False
         skip_reason: str | None = None
-        if max(published_this_run, publish_attempts_this_run) >= REPLY_RUN_CAP:
+        if max(published_this_run, publish_attempts_this_run) >= run_cap:
             skip_reason = "RUN_CAP"
         elif responded_today + quota_used_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
@@ -655,7 +697,7 @@ def main() -> dict:
         else:
             if tweet_id not in generated_ids:
                 capacity = max(1, min(
-                    REPLY_RUN_CAP - max(published_this_run, publish_attempts_this_run),
+                    run_cap - max(published_this_run, publish_attempts_this_run),
                     REPLY_DAILY_CAP - responded_today - quota_used_this_run,
                 ))
                 generate_window(idx, capacity)
@@ -714,6 +756,7 @@ def main() -> dict:
 
         review_entry = {
             "reply_tweet_id": tweet_id,
+            "origin": "recovered" if tweet.get("_retry") else "new",
             "comment_preview": tweet["text"][:100],
             "parent_preview": tweet.get("parent_text", "")[:160],
             "label": tweet["label"],
@@ -774,6 +817,23 @@ def main() -> dict:
             logger.info(f"[Step7] 첫 발행 부하 분산 딜레이 {delay}초 대기")
             time.sleep(delay)
 
+        # A long start delay may cross the TTL. A claim is not permission to
+        # publish an expired comment; no X request has been made on this path.
+        original = store.parse_utc(tweet.get("created_at"))
+        if original and datetime.now(UTC) - original > timedelta(
+            hours=filter_mod.REPLY_MAX_AGE_HOURS
+        ):
+            if not store.update_skip_reason(tweet_id, "EXPIRED_BEFORE_SEND", metadata):
+                cursor_safe_to_advance = False
+                review_entry["persistence_error"] = "EXPIRY_SAVE_FAILED"
+                send_admin_alert("Reply expiry state save failed; publication was not attempted")
+            filter_mod.release_admission(tweet, cap_ctx)
+            review_entry["result"] = "EXPIRED_BEFORE_SEND"
+            _skip(tweet_id, "EXPIRED_BEFORE_SEND")
+            continue
+
+        telemetry.event(summary, "PUBLISH_REQUEST", tweet_id, origin=review_entry["origin"],
+                        source=response_source)
         # live: 결과 불명도 quota를 점유한다. 명시적 거절일 때만 반환한다.
         quota_used_this_run += 1
         foreign_reserved_this_run += int(bool(tweet.get("foreign_thread")))
@@ -802,6 +862,9 @@ def main() -> dict:
                     "Reply Engine DB confirmation failed: "
                     f"tweet={tweet_id}, response={response_tweet_id}"
                 )
+            telemetry.event(summary, review_entry["result"], tweet_id,
+                            response_id=response_tweet_id, origin=review_entry["origin"],
+                            source=response_source)
             recent_texts.append(reply_text)
             published_this_run += 1
             foreign_published += int(bool(tweet.get("foreign_thread")))
@@ -829,7 +892,7 @@ def main() -> dict:
                 foreign_reserved_this_run -= int(bool(tweet.get("foreign_thread")))
 
         # 발행 간 지터 (마지막 건 제외)
-        if idx < len(pass_items) - 1 and published_this_run < REPLY_RUN_CAP:
+        if idx < len(pass_items) - 1 and published_this_run < run_cap:
             time.sleep(random.randint(PUBLISH_JITTER_MIN_SEC, PUBLISH_JITTER_MAX_SEC))
 
     summary["foreign_thread_replies"] = foreign_published

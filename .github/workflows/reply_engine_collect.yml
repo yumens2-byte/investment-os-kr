@@ -1,0 +1,68 @@
+name: Reply Collection and Health
+
+# Opt-in only. Does not call create_tweet/like or bypass the publication test gate.
+on:
+  schedule:
+    - cron: "47 1,7,13,19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Same guard as reply/operational beta: budget and cursor must have one writer.
+concurrency:
+  group: reply-engine
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: vars.REPLY_COLLECTOR_ENABLED == 'true' && vars.REPLY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require an approved immutable release
+        env:
+          RELEASE_SHA: ${{ vars.REPLY_RELEASE_SHA }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Set approved REPLY_RELEASE_SHA"; exit 1; }
+          echo "REPLY_RUNTIME_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REPLY_RUNTIME_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-reply.lock
+      - run: pip install -r requirements-reply.lock
+      - name: Collect without model or publication
+        env:
+          REPLY_ENABLED: ${{ vars.REPLY_ENABLED }}
+          REPLY_COLLECTOR_ENABLED: ${{ vars.REPLY_COLLECTOR_ENABLED }}
+          X_MY_USER_ID: ${{ vars.X_MY_USER_ID }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
+          DAILY_BUDGET_KRW: ${{ vars.DAILY_BUDGET_KRW }}
+          X_READ_COST_KRW: ${{ vars.X_READ_COST_KRW }}
+          X_WRITE_COST_KRW: ${{ vars.X_WRITE_COST_KRW }}
+        run: python -m scripts.collect_reply
+      - name: Check collection heartbeat
+        if: always() && env.REPLY_RUNTIME_SHA != ''
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: python -m scripts.reply_health
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reply-collection-${{ github.run_id }}
+          path: |
+            logs/reply_collection_report.json
+            logs/reply_events.jsonl
+          retention-days: 14

@@ -8,6 +8,8 @@ on:
       - "core/gemini_gateway.py"
       - "tests/**"
       - "requirements.txt"
+      - "requirements-reply.lock"
+      - "scripts/**"
       - ".github/workflows/reply_engine*.yml"
   push:
     branches: ["feat/reply-engine-*"]
@@ -29,9 +31,11 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install test dependencies
-        run: pip install -r requirements.txt pytest==9.1.1 ruff==0.16.10
+        run: pip install -r requirements-reply.lock
       - name: Reply static checks
         run: ruff check run_reply.py reply_engine core/gemini_gateway.py tests/test_reply_v2.py tests/test_reply_review_safety.py tests/test_reply_review_quality.py tests/test_reply_sdk_integration.py tests/test_reply_beta.py tests/test_reply_quality_replay.py tests/test_check_reply_db.py scripts/reply_operational_beta.py scripts/reply_quality_replay.py tests/test_reply_db_audit_codes.py scripts/check_reply_db.py
+      - name: New quality and collection static checks
+        run: ruff check scripts/collect_reply.py scripts/reply_health.py tests/test_reply_quality_v21.py
       - name: Full unit suite
         run: python -m pytest -q tests/ --junitxml=unit-results.xml
       - name: Upload unit results

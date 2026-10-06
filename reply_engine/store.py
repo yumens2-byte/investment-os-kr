@@ -38,9 +38,9 @@ from datetime import UTC, datetime, timedelta
 
 from db.supabase_client import get_client
 from reply_engine.config import REPLY_MAX_AGE_HOURS, REPLY_RETRY_WINDOW_HOURS
-from reply_engine.policy import BLOCKED_STATES, DEFER_REASONS, decode_metadata
+from reply_engine.policy import BLOCKED_STATES, DEFER_REASONS, decode_metadata, encode_metadata
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,11 @@ def insert_history(record: dict) -> bool:
                     int(old_meta.get(counter, 0)), int(new_meta.get(counter, 0))
                 )
             new_meta["original_created_at"] = old_meta.get("original_created_at")
+            new_meta["first_seen_at"] = old_meta.get("first_seen_at")
+            new_meta["first_recorded_at"] = (
+                old_meta.get("first_recorded_at") or previous.get("created_at")
+            )
+            new_meta["previous_reason"] = previous.get("skip_reason")
             record = {**record, "error_message": json.dumps(new_meta, ensure_ascii=False)}
         query = (
             client.table(_T_HISTORY)
@@ -316,6 +321,8 @@ def get_history_metrics(days: int = 7) -> dict:
             "history_rows": total,
             "responded": responded,
             "response_rate": round(responded / total, 4) if total else 0.0,
+            "metric_basis": "current_history_rows_by_mutable_created_at",
+            "eligible_response_rate": None,
             "skip_reasons": dict(sorted(skips.items(), key=lambda item: (-item[1], item[0]))[:10]),
             "truncated": total >= 5000,
         }
@@ -370,9 +377,10 @@ def get_retryable_history(limit: int = 10) -> list[dict]:
             except (TypeError, ValueError):
                 continue
             rows.append(row)
-            if len(rows) >= limit:
-                break
-        return rows
+        rows.sort(key=lambda row: parse_utc(
+            decode_metadata(row.get("error_message")).get("original_created_at")
+        ))
+        return rows[:limit]
     except Exception as exc:
         logger.warning("[Store] recovery lookup failed: %s", exc)
         return []
@@ -610,4 +618,100 @@ def insert_like(record: dict) -> bool:
         return bool(get_client().table(_T_LIKES).insert(record).execute().data)
     except Exception as exc:
         logger.error(f"[Store] like 기록 실패: {exc}")
+        return False
+
+
+def parse_utc(value) -> datetime | None:
+    try:
+        parsed = value if isinstance(value, datetime) else datetime.fromisoformat(
+            str(value).replace("Z", "+00:00")
+        )
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    except (TypeError, ValueError):
+        return None
+
+
+def expire_deferred(account_user_id: str, *, now=None, limit: int = 500) -> dict:
+    """CAS-finalize only provably unattempted/explicitly rejected deferred rows.
+
+    No created_at cutoff: old rows must be cleaned even after the recovery window.
+    Unknown/claimed publications never match this scan or its conditional update.
+    """
+    now = now or datetime.now(UTC)
+    stats = {"checked": 0, "expired": 0, "conflicts": 0, "invalid": 0, "errors": 0}
+    if not account_user_id:
+        return stats
+    try:
+        rows = (get_client().table(_T_HISTORY).select("*")
+                .eq("mode", "live").eq("responded", False)
+                .is_("response_tweet_id", "null")
+                .in_("skip_reason", sorted(DEFER_REASONS))
+                .order("created_at").limit(max(1, min(500, limit))).execute()).data or []
+        stats["scan_saturated"] = len(rows) >= max(1, min(500, limit))
+        for row in rows:
+            meta = decode_metadata(row.get("error_message"))
+            if meta.get("account_user_id") != account_user_id:
+                continue
+            stats["checked"] += 1
+            original = parse_utc(meta.get("original_created_at"))
+            recorded = parse_utc(row.get("created_at"))
+            if original is None or recorded is None:
+                stats["invalid"] += 1
+                continue
+            reason = None
+            if now - original > timedelta(hours=REPLY_MAX_AGE_HOURS):
+                reason = "EXPIRED_CAP" if "CAP" in row["skip_reason"] else "EXPIRED_DEFERRED"
+            elif now - recorded > timedelta(hours=REPLY_RETRY_WINDOW_HOURS):
+                reason = "EXPIRED_RETRY"
+            if not reason:
+                continue
+            metadata = {**meta, "previous_reason": row["skip_reason"],
+                        "expired_at": now.isoformat(), "last_decision_at": now.isoformat()}
+            changed = (get_client().table(_T_HISTORY)
+                       .update({"skip_reason": reason,
+                                "error_message": json.dumps(metadata, ensure_ascii=False)})
+                       .eq("reply_tweet_id", row["reply_tweet_id"])
+                       .eq("mode", "live").eq("responded", False)
+                       .is_("response_tweet_id", "null")
+                       .eq("skip_reason", row["skip_reason"])
+                       .eq("error_message", row["error_message"]).execute()).data or []
+            stats["expired" if changed else "conflicts"] += 1
+    except Exception as exc:
+        stats["errors"] += 1
+        logger.warning("[Store] deferred expiry failed: %s", type(exc).__name__)
+    return stats
+
+
+def persist_collected(tweets: list[dict], users: dict, account_user_id: str,
+                      run_id: str) -> bool:
+    """Insert-only inbox using existing history; replay cannot replace any decision.
+
+    Persist the entire fetched batch before advancing its cursor. On failure the
+    cursor stays put and ON CONFLICT DO NOTHING makes replay safe. This is ordered
+    at-least-once ingestion, not a multi-request database transaction.
+    """
+    seen_at = datetime.now(UTC).isoformat()
+    records = []
+    for tweet in {t["id"]: t for t in tweets}.values():
+        meta = encode_metadata({**tweet, "_account_user_id": account_user_id,
+                                "_run_id": run_id, "_first_seen_at": seen_at,
+                                "_user_snapshot": users.get(tweet["author_id"])})
+        reason = "SELF" if tweet["author_id"] == account_user_id else "RECEIVED"
+        records.append({
+            "reply_tweet_id": tweet["id"], "conversation_id": tweet["conversation_id"],
+            "author_id": tweet["author_id"],
+            "author_username": users.get(tweet["author_id"], {}).get("username", ""),
+            "comment_text": tweet["text"][:500], "classification": "AMBIGUOUS",
+            "responded": False, "response_tweet_id": None, "response_text": "",
+            "skip_reason": reason, "mode": "live", "dry_run": False,
+            "error_message": meta,
+        })
+    try:
+        for offset in range(0, len(records), 100):
+            get_client().table(_T_HISTORY).upsert(
+                records[offset:offset + 100], on_conflict="reply_tweet_id", ignore_duplicates=True
+            ).execute()
+        return True
+    except Exception as exc:
+        logger.error("[Store] inbox persistence failed: %s", type(exc).__name__)
         return False

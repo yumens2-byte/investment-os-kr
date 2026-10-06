@@ -26,8 +26,9 @@ from reply_engine.config import (
     REPLY_MAX_LENGTH,
     REPLY_SIMILARITY_THRESHOLD,
 )
+from reply_engine.policy import intent_for
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,18 @@ def check_reply(
     if _IMPERATIVE_PATTERN.search(text):
         return False, "GATE_IMPERATIVE"
 
+
+    # Content validity is separate from lexical echo/similarity. No market hype
+    # may be amplified merely because the generated wording differs from input.
+    if re.search(r"돈\s*복사|확정\s*수익|떡상|가즈아", text):
+        return False, "GATE_MARKET_HYPE"
+    intent = intent_for(comment_text, "POSITIVE")
+    if intent == "MARKET_HYPE" and re.search(
+        r"기대|응원|성투|대박|수익|오르|상승|달려|함께|같이|동의|같은\s*마음", text
+    ):
+        return False, "GATE_MARKET_HYPE"
+    if intent in {"REACTION", "LAUGH"} and re.search(r"의견|분석|설명|정리|통찰", text):
+        return False, "GATE_INTENT"
 
     if comment_text:
         # F-1: 상투어를 걷어낸 상황어 잔여끼리 비교.

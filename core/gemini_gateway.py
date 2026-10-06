@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 
 VERSION = "1.0.0"
@@ -51,6 +52,22 @@ MODEL_MAP: dict[str, str] = {
 MAX_RETRIES: int = 3
 BACKOFF_BASE: int = 2
 DEFAULT_MAX_TOKENS: int = 1024
+MAX_API_CALLS: int = 12
+
+
+def _error_status(exc: Exception) -> int | None:
+    for value in (getattr(exc, "code", None), getattr(exc, "status_code", None)):
+        if isinstance(value, int) and not isinstance(value, bool) and 400 <= value <= 599:
+            return value
+    match = re.search(r"\b([45][0-9]{2})\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _retryable(exc: Exception, status: int | None) -> bool:
+    return status in {408, 429, 500, 502, 503, 504} or isinstance(
+        exc, (TimeoutError, ConnectionError)
+    ) or type(exc).__name__ in {"ReadTimeout", "ConnectTimeout", "ConnectError"}
+
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +123,7 @@ def call(
     response_json: bool = False,
     fallback_value: str | None = None,
     allow_paid: bool = True,
+    max_api_calls: int = MAX_API_CALLS,
 ) -> dict:
     """
     Gemini API 텍스트 호출 (Main → Sub → Sub2 → Pay 자동 전환).
@@ -144,13 +162,20 @@ def call(
     model_name = MODEL_MAP.get(model, MODEL_MAP["flash-lite"])
     last_error = ""
     api_calls = 0
+    attempts = []
+    call_limit = max(1, min(MAX_API_CALLS, int(max_api_calls)))
 
     for key_label, api_key, is_paid in keys:
+        if api_calls >= call_limit:
+            break
         # 유료 키 진입 시 경고 로그 (실제 과금)
         if is_paid:
             logger.warning(f"[GeminiGW] ⚠️ 무료 키 전부 실패 → 유료 키({key_label}) 사용")
 
         for attempt in range(1, MAX_RETRIES + 1):
+            if api_calls >= call_limit:
+                break
+            request_started = False
             try:
                 client = _get_client(api_key)
 
@@ -163,12 +188,14 @@ def call(
                     config.response_mime_type = "application/json"
 
                 api_calls += 1
+                request_started = True
                 response = client.models.generate_content(
                     model=model_name,
                     contents=prompt,
                     config=config,
                 )
 
+                attempts.append({"key": key_label, "model": model_name, "status": 200})
                 text = (response.text or "").strip()
 
                 result = {
@@ -180,6 +207,7 @@ def call(
                     "paid": is_paid,
                     "error": None,
                     "api_calls": api_calls,
+                    "attempts": attempts,
                     "usage": {
                         name: getattr(getattr(response, "usage_metadata", None), name, None)
                         for name in (
@@ -211,21 +239,34 @@ def call(
                 return result
 
             except Exception as e:
+                status = _error_status(e)
                 last_error = f"{type(e).__name__}: {e}"
+                for _, secret, _ in keys:
+                    last_error = last_error.replace(secret, "[REDACTED]")
+                attempts.append({
+                    "key": key_label, "model": model_name, "status": status,
+                    "request_started": request_started, "error_type": type(e).__name__,
+                })
                 logger.warning(
-                    f"[GeminiGW] 시도 실패 | key={key_label} attempt={attempt}/{MAX_RETRIES} "
-                    f"error={last_error}"
+                    "[GeminiGW] failure key=%s model=%s attempt=%s status=%s error_type=%s",
+                    key_label, model_name, attempt, status, type(e).__name__,
                 )
-                if attempt < MAX_RETRIES:
-                    sleep_sec = BACKOFF_BASE**attempt
-                    time.sleep(sleep_sec)
-                # 마지막 시도 실패 → 다음 키로 넘어감
-                continue
+                # Bad payloads do not improve on another key. Auth/model availability
+                # can differ by project; 401/403/404 move directly to the next key.
+                if status in {400, 422}:
+                    result = _fail_result(last_error, fallback_value)
+                    result.update(api_calls=api_calls, attempts=attempts)
+                    return result
+                if not _retryable(e, status):
+                    break
+                if attempt < MAX_RETRIES and api_calls < call_limit:
+                    time.sleep(BACKOFF_BASE**attempt)
 
     # 모든 키 실패
     logger.error(f"[GeminiGW] 전체 키 실패: {last_error}")
     result = _fail_result(last_error, fallback_value)
     result["api_calls"] = api_calls
+    result["attempts"] = attempts
     return result
 
 

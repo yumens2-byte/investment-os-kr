@@ -36,7 +36,7 @@ from reply_engine.config import REPLY_MAX_LENGTH
 from reply_engine.lang import is_non_korean
 from reply_engine.policy import SAFE_POOLS, BatchResult, intent_for
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +195,8 @@ def generate_batch(items: list[dict]) -> dict[str, str]:
         "FOREIGN_DIRECT는 타인의 원글에서 내 부모 댓글에 직접 온 답글이다. "
         "부모의 행동을 상대의 행동으로 바꾸지 않는다. 작성자가 확인 불가면 추측하지 않는다.\n"
         "THANKS는 저야말로 감사 방향, PRAISE는 짧은 감사, LAUGH는 짧은 웃음/맞장구, "
+        "REACTION은 이모지에 대한 짧은 반응이며 의견·분석이 있었다고 단정하지 않는다. "
+        "MARKET_HYPE에는 기대·응원·수익 긍정 없이 중립 반응만 한다. "
         "시장 관찰/환호는 댓글에 명시된 상황에만 담백하게 호응한다. "
         "'돈복사', '슈드', '가즈아'는 시장 반응이며 매매 방향을 지지하지 않는다.\n"
         "모르는 맥락에 아는 척하거나 상황어의 주체가 뒤집히면 역할이 뒤집힘 오류다. "

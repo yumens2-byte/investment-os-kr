@@ -45,12 +45,24 @@ jobs:
   # ─────────────────────────────────────────
   test:
     name: Run Tests
+    outputs:
+      runtime_sha: ${{ steps.runtime.outputs.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
+      - name: Validate approved runtime ref
+        id: runtime
+        env:
+          RUNTIME_REF: ${{ vars.REPLY_RELEASE_SHA || github.sha }}
+        run: |
+          [[ "$RUNTIME_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release SHA"; exit 1; }
+          echo "REPLY_RUNTIME_SHA=$RUNTIME_REF" >> "$GITHUB_ENV"
+          echo "sha=$RUNTIME_REF" >> "$GITHUB_OUTPUT"
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REPLY_RUNTIME_SHA }}
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -60,9 +72,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
+          if [[ -f requirements-reply.lock ]]; then
+            pip install -r requirements-reply.lock
+          else
+            pip install -r requirements.txt pytest==9.1.1
+          fi
 
       - name: Run pytest
         run: pytest -q tests/
@@ -77,8 +91,16 @@ jobs:
     timeout-minutes: 45   # 기본 회당 2건 + 제한적 멘션 페이지네이션 여유
 
     steps:
+      - name: Validate approved runtime ref
+        env:
+          RUNTIME_REF: ${{ needs.test.outputs.runtime_sha }}
+        run: |
+          [[ "$RUNTIME_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release SHA"; exit 1; }
+          echo "REPLY_RUNTIME_SHA=$RUNTIME_REF" >> "$GITHUB_ENV"
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REPLY_RUNTIME_SHA }}
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -88,8 +110,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+          if [[ -f requirements-reply.lock ]]; then
+            pip install -r requirements-reply.lock
+          else
+            pip install -r requirements.txt
+          fi
 
       - name: Validate live dispatch
         env:
@@ -145,6 +170,8 @@ jobs:
           # v1.0.6 (2026-08-27): 일일 답글 상한 운영값 — 미등록 시 코드 기본값 8 (env_int 안전 파서)
           REPLY_DAILY_CAP:        ${{ vars.REPLY_DAILY_CAP }}
           REPLY_RUN_CAP:          ${{ vars.REPLY_RUN_CAP }}
+          REPLY_URGENT_DRAIN_ENABLED: ${{ vars.REPLY_URGENT_DRAIN_ENABLED }}
+          REPLY_URGENT_RUN_CAP: ${{ vars.REPLY_URGENT_RUN_CAP }}
           REPLY_AUTHOR_DAILY_CAP: ${{ vars.REPLY_AUTHOR_DAILY_CAP }}
           REPLY_CONV_DAILY_CAP:   ${{ vars.REPLY_CONV_DAILY_CAP }}
           REPLY_MAX_AGE_HOURS:    ${{ vars.REPLY_MAX_AGE_HOURS }}
@@ -181,5 +208,6 @@ jobs:
             logs/reply_report_*.json
             logs/reply_db_audit.json
             logs/reply_*.log
+            logs/reply_events.jsonl
           retention-days: 14
           if-no-files-found: warn

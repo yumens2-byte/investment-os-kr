@@ -219,3 +219,5 @@ __marimo__/
 
 # Local reply test/runtime reports (uploaded separately by Actions).
 logs/
+
+.venv311/
