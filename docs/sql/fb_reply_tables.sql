@@ -5,8 +5,11 @@
 -- 공통 store(reply_engine/store.py)의 CAS/claim/복구 코드를 테이블명만 바꿔 재사용하기 위함.
 -- 컬럼 의미 매핑: reply_tweet_id = FB comment id, response_tweet_id = 내 답글 comment id,
 --                 conversation_id = FB post id, author_id = Page 범위 사용자 ID(PSID).
--- 보안: RLS 활성 + anon/authenticated 권한 회수 → service_role 키 전용
---       (마스터 기준: RLS 테이블은 service_role 필수. kr_reply_*와 달리 anon 노출 없음)
+-- 보안 (2026-10-07 마스터 결정): 레포 Secret SUPABASE_KEY(anon 키)를 그대로 사용한다.
+--       kr_reply_*와 같이 RLS는 해제하되, anon에는 엔진에 필요한 최소 권한만 부여한다
+--       (history·cursor·budget = SELECT/INSERT/UPDATE, blacklist = SELECT. DELETE/TRUNCATE 없음).
+--       authenticated 권한은 부여하지 않는다.
+-- 운영 적용 이력: migration fb1_fb_reply_tables → fb1_fb_reply_tables_anon_access (최종 상태 = 이 파일)
 -- kr_reply_* 테이블은 이 스크립트에서 일절 변경하지 않는다.
 -- ============================================================================
 
@@ -64,13 +67,16 @@ COMMENT ON COLUMN public.fb_reply_history.response_tweet_id IS '내 Page가 단 
 COMMENT ON COLUMN public.fb_reply_history.conversation_id   IS 'Facebook post id (게시물 단위 일일 상한)';
 COMMENT ON COLUMN public.fb_reply_history.author_id         IS 'Page 범위 사용자 ID (PSID). 실명은 저장하지 않음';
 
-ALTER TABLE public.fb_reply_history   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.fb_reply_cursor    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.fb_reply_budget    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.fb_reply_blacklist ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fb_reply_history   DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fb_reply_cursor    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fb_reply_budget    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fb_reply_blacklist DISABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON public.fb_reply_history, public.fb_reply_cursor,
               public.fb_reply_budget, public.fb_reply_blacklist FROM anon, authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.fb_reply_history, public.fb_reply_cursor,
+                                public.fb_reply_budget TO anon;
+GRANT SELECT ON public.fb_reply_blacklist TO anon;
 GRANT SELECT, INSERT, UPDATE ON public.fb_reply_history, public.fb_reply_cursor,
                                 public.fb_reply_budget TO service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.fb_reply_blacklist TO service_role;

@@ -91,7 +91,7 @@ Graph comments에는 since_id가 없다. 따라서 신규 판정은 커서가 �
 | 구분 | 이름 | 기본 |
 |---|---|---|
 | Secret | FACE_PAGE_ID, FACE_PAGE_TOKEN | 필수 |
-| Secret (재사용) | SUPABASE_URL, SUPABASE_REPLY_SERVICE_ROLE_KEY, GEMINI_API_KEY / _SUB_KEY / _SUB_SUB_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALERT_CHAT_ID | — |
+| Secret (재사용) | SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY / _SUB_KEY / _SUB_SUB_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALERT_CHAT_ID | — |
 | Variable | FACE_REPLY_ENABLED / FACE_REPLY_MODE | false / dry_run |
 | Variable | FACE_REPLY_DAILY_CAP / _RUN_CAP(1~5) / _AUTHOR_DAILY_CAP / _POST_DAILY_CAP | 5 / 1 / 1 / 2 |
 | Variable | FACE_REPLY_MAX_AGE_HOURS / _RETRY_WINDOW_HOURS | 24 / 24 |
@@ -100,7 +100,7 @@ Graph comments에는 since_id가 없다. 따라서 신규 판정은 커서가 �
 | Variable | FACE_REPLY_READ_CALLS_PER_DAY / _WRITE_CALLS_PER_DAY / _BUC_STOP_PCT | 120 / 10 / 80 |
 | Variable | FACE_REPLY_RELEASE_SHA | 승인 SHA 고정 운영 시 |
 
-Supabase 키 주의: FB 테이블은 RLS가 켜져 있고 anon 권한이 회수되어 있다. 따라서 FB 워크플로는 `SUPABASE_REPLY_SERVICE_ROLE_KEY`만 사용하며 anon fallback이 없다.
+Supabase 키 (2026-10-07 마스터 결정): FB 워크플로는 기존 Secret `SUPABASE_KEY`(레포 기록상 anon 키, REPLY_ENGINE_V2_RESIDUAL.md:79·100)를 사용한다. `fb_reply_*`는 kr_reply_*와 같이 RLS를 해제했다. 다만 anon에는 엔진에 필요한 최소 권한만 있다: history·cursor·budget은 SELECT/INSERT/UPDATE, blacklist는 SELECT. DELETE·TRUNCATE와 authenticated 권한은 없다. 운영 DB에서 anon 역할로 INSERT/CAS UPDATE/upsert/SELECT 성공, DELETE·blacklist INSERT 거부(42501)를 검증했다(롤백, 잔여 0건). 블랙리스트 등록은 Supabase 대시보드(관리자)에서 한다.
 
 ## 6. 미확정 (Preflight 실측 항목)
 
