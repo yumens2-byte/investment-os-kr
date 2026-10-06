@@ -1,4 +1,8 @@
-"""Reply Engine 운영 DB의 스키마 계약과 핵심 데이터 정합성을 점검한다."""
+"""Reply Engine 운영 DB의 스키마 계약과 핵심 데이터 정합성을 점검한다.
+
+v1.1.0 (2026-10-07, FB-1): audit_reply_db(required_contracts=, optional_contracts=,
+history_table=) 키워드 인자 추가. 미지정 시 X 계약(kr_reply_*)으로 기존과 동일하다.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from db.supabase_client import get_client
+
+VERSION = "1.1.0"
 
 REQUIRED_TABLE_CONTRACTS = {
     "kr_reply_history": (
@@ -27,7 +33,7 @@ OPTIONAL_TABLE_CONTRACTS = {
 
 def _sample(table: str, columns: str, limit: int) -> list[dict[str, Any]]:
     query = get_client().table(table).select(columns)
-    if table == "kr_reply_history":
+    if table.endswith("_reply_history"):
         query = query.order("created_at", desc=True)
     result = query.limit(limit).execute()
     return list(result.data or [])
@@ -49,6 +55,9 @@ def audit_reply_db(
     *,
     require_likes: bool = False,
     terminal_grace_minutes: int = 60,
+    required_contracts: dict[str, str] | None = None,
+    optional_contracts: dict[str, str] | None = None,
+    history_table: str = "kr_reply_history",
 ) -> dict[str, Any]:
     """테이블 계약과 history 불변식을 읽기 전용으로 검사한다.
 
@@ -69,15 +78,19 @@ def audit_reply_db(
         "terminal_grace_minutes": max(0, terminal_grace_minutes),
     }
     rows_by_table: dict[str, list[dict[str, Any]]] = {}
-    contracts = {**REQUIRED_TABLE_CONTRACTS, **OPTIONAL_TABLE_CONTRACTS}
+    required = REQUIRED_TABLE_CONTRACTS if required_contracts is None else required_contracts
+    optional = OPTIONAL_TABLE_CONTRACTS if optional_contracts is None else optional_contracts
+    if history_table not in required:
+        raise ValueError(f"history table {history_table!r} must be a required contract")
+    contracts = {**required, **optional}
     for table, columns in contracts.items():
         try:
             # history는 limit+1을 읽어 잘림 여부를 정확히 판정한다. 나머지 테이블은
             # 컬럼 계약 확인만 하므로 한 행이면 충분하다.
-            limit = max(1, history_limit) + 1 if table == "kr_reply_history" else 1
+            limit = max(1, history_limit) + 1 if table == history_table else 1
             rows_by_table[table] = _sample(table, columns, limit)
         except Exception as exc:
-            is_required = table in REQUIRED_TABLE_CONTRACTS or require_likes
+            is_required = table in required or require_likes
             error_bucket = "schema_errors" if is_required else "optional_schema_errors"
             report[error_bucket][table] = type(exc).__name__
             # SQLSTATE/PostgREST codes identify permissions, missing columns and
@@ -90,7 +103,7 @@ def audit_reply_db(
                 report["healthy"] = False
 
     requested_limit = max(1, history_limit)
-    sampled_history = rows_by_table.get("kr_reply_history", [])
+    sampled_history = rows_by_table.get(history_table, [])
     report["truncated"] = len(sampled_history) > requested_limit
     history = sampled_history[:requested_limit]
     report["rows_checked"] = len(history)

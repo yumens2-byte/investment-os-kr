@@ -38,6 +38,10 @@ v1.5.0 (2026-08-30, R-10/B):
 v1.4.0 (2026-08-30, R-9):
   외국어 댓글은 AI 생성 대신 정형 문구를 사용한다 (마스터 확정 C안).
   AI 생성 대상이 0건이면 Gemini 호출이 없으므로 예산 계상도 하지 않는다.
+
+v2.2.0 (2026-10-07, FB-1):
+  리포트 본문을 telemetry.write_run_report로 공통화 (Facebook 러너와 공유).
+  판단 흐름·호출 인자·DB 테이블은 변경 없음.
 """
 
 from __future__ import annotations
@@ -84,7 +88,7 @@ from reply_engine.policy import (
     encode_metadata,
 )
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -113,49 +117,9 @@ def _setup_logging() -> None:
 
 def _write_report(summary: dict, guard=None) -> None:
     """실행 요약 JSON 리포트 (artifact 업로드 대상) — 실패해도 파이프라인 무영향.
-    guard 전달 시 예산 스냅샷 포함 (B-3).
+    guard 전달 시 예산 스냅샷 포함 (B-3). 본문은 telemetry.write_run_report로 공통화 (FB-1).
     """
-    collected = int(summary.get("collected") or 0)
-    processed = int(summary.get("processed", collected) or 0)
-    candidates = int(summary.get("candidates") or 0)
-    classified_pass = int(summary.get("classified_pass") or 0)
-    published = int(summary.get("actual_published", summary.get("published")) or 0)
-    if summary.get("mode") in {"dry_run", "shadow"}:
-        published = 0
-    summary["funnel"] = {
-        "candidate_rate": round(candidates / processed, 4) if processed else 0.0,
-        "classification_pass_rate": (round(classified_pass / candidates, 4) if candidates else 0.0),
-        "publish_rate_of_processed": round(published / processed, 4) if processed else 0.0,
-        "publish_rate_of_collected": (
-            round(published / collected, 4)
-            if collected and not summary.get("recovered_failures")
-            else None
-        ),
-        "publish_rate_of_pass": round(published / classified_pass, 4) if classified_pass else 0.0,
-    }
-    review = summary.get("review", [])
-    summary["cohorts"] = {
-        origin: {
-            "reviewed": sum(r.get("origin") == origin for r in review),
-            "published": sum(r.get("origin") == origin and r.get("result") in {
-                "PUBLISHED", "PUBLISHED_DB_UNCONFIRMED"
-            } for r in review),
-            "simulated": sum(r.get("origin") == origin and r.get("result") == "SIMULATED"
-                             for r in review),
-        } for origin in ("new", "recovered")
-    }
-    summary["finished_at"] = datetime.now(UTC).isoformat()
-    if guard is not None:
-        summary["budget"] = guard.snapshot()
-    try:
-        log_dir = Path("logs")
-        log_dir.mkdir(exist_ok=True)
-        stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        path = log_dir / f"reply_report_{stamp}.json"
-        path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, default=str))
-        logger.info(f"[Report] 리포트 저장: {path}")
-    except Exception as exc:
-        logger.warning(f"[Report] 리포트 저장 실패 (무시): {exc}")
+    telemetry.write_run_report(summary, guard, prefix="reply_report")
 
 
 def _cursor_stale_hours(cursor: dict | None) -> int | None:

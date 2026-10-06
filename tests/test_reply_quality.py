@@ -130,6 +130,6 @@ def test_c3_live_published_result(monkeypatch):
 
 def test_versions_bumped_c_series():
     """C 시리즈 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "2.1.0"
+    assert run_reply.VERSION == "2.2.0"
     assert gate.VERSION == "2.1.0"
-    assert generator.VERSION == "2.1.0"
+    assert generator.VERSION == "2.2.0"

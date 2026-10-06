@@ -28,19 +28,28 @@ v1.1.0 (2026-08-30, R-5): 배치 조회 3종 신설 (history_exists_bulk,
   사유: 후보 N건 × 3쿼리 순차 실행 구조가 MENTIONS_MAX_RESULTS 100 상향 시
   최대 300쿼리로 선형 폭증. 배치 전환으로 3쿼리 고정.
   실패 정책은 단건과 동일하게 보수적(확인 불가 = 발행 금지)으로 유지한다.
+
+v2.2.0 (2026-10-07, FB-1): 플랫폼 공통화.
+  테이블 참조 함수에 키워드 전용 인자 ``tables``(기본값 X_TABLES)를 추가했다.
+  X 호출부는 인자를 넘기지 않으므로 요청 테이블·쿼리는 기존과 동일하다.
+  Facebook은 ``bind(FB 테이블)``로 같은 CAS/claim/복구 코드를 재사용한다.
+  ``get_client``는 계속 모듈 전역에서 조회한다 (기존 테스트 patch 규약 보존).
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from db.supabase_client import get_client
 from reply_engine.config import REPLY_MAX_AGE_HOURS, REPLY_RETRY_WINDOW_HOURS
 from reply_engine.policy import BLOCKED_STATES, DEFER_REASONS, decode_metadata, encode_metadata
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,36 @@ _T_BLACKLIST = "kr_reply_blacklist"
 _T_LIKES = "kr_reply_likes"
 
 _KST_OFFSET = timedelta(hours=9)
+
+
+@dataclass(frozen=True)
+class ReplyTables:
+    """플랫폼별 영속화 네임스페이스 (FB-1).
+
+    컬럼 계약은 플랫폼 공통이며 테이블 이름만 다르다. 시간 창이 None이면 호출
+    시점의 모듈 전역(REPLY_MAX_AGE_HOURS / REPLY_RETRY_WINDOW_HOURS)을 사용한다.
+    """
+
+    history: str
+    cursor: str
+    budget: str
+    blacklist: str
+    likes: str | None = None
+    max_age_hours: int | None = None
+    retry_window_hours: int | None = None
+
+
+X_TABLES = ReplyTables(_T_HISTORY, _T_CURSOR, _T_BUDGET, _T_BLACKLIST, _T_LIKES)
+
+
+def _max_age_hours(tables: ReplyTables) -> int:
+    return REPLY_MAX_AGE_HOURS if tables.max_age_hours is None else tables.max_age_hours
+
+
+def _retry_window_hours(tables: ReplyTables) -> int:
+    if tables.retry_window_hours is None:
+        return REPLY_RETRY_WINDOW_HOURS
+    return tables.retry_window_hours
 
 
 # ---------------------------------------------------------------------------
@@ -77,12 +116,12 @@ def kst_day_start_utc_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _retry_cutoff_iso() -> str:
+def _retry_cutoff_iso(*, tables: ReplyTables = X_TABLES) -> str:
     """재시도 창의 하한 시각 (R-11). 이보다 오래된 미발행 이력은 재시도하지 않는다."""
-    return (datetime.now(UTC) - timedelta(hours=REPLY_RETRY_WINDOW_HOURS)).isoformat()
+    return (datetime.now(UTC) - timedelta(hours=_retry_window_hours(tables))).isoformat()
 
 
-def _blocked_row(row: dict) -> bool:
+def _blocked_row(row: dict, *, tables: ReplyTables = X_TABLES) -> bool:
     if row.get("response_tweet_id") or row.get("responded"):
         return True
     if row.get("skip_reason") in BLOCKED_STATES:
@@ -100,40 +139,40 @@ def _blocked_row(row: dict) -> bool:
     except (TypeError, ValueError):
         return True
     created = row.get("created_at")
-    return bool(created and str(created) < _retry_cutoff_iso())
+    return bool(created and str(created) < _retry_cutoff_iso(tables=tables))
 
 
-def history_exists(reply_tweet_id: str) -> bool:
+def history_exists(reply_tweet_id: str, *, tables: ReplyTables = X_TABLES) -> bool:
     try:
         rows = (
             get_client()
-            .table(_T_HISTORY)
+            .table(tables.history)
             .select("*")
             .eq("reply_tweet_id", reply_tweet_id)
             .limit(1)
             .execute()
         ).data or []
-        return any(_blocked_row(row) for row in rows)
+        return any(_blocked_row(row, tables=tables) for row in rows)
     except Exception as exc:
         logger.error("[Store] history_exists failed: %s", exc)
         return True
 
 
-def insert_history(record: dict) -> bool:
+def insert_history(record: dict, *, tables: ReplyTables = X_TABLES) -> bool:
     """Insert new decisions or CAS-update unpublished rows; never overwrite publication."""
     try:
         client = get_client()
         rows = (
-            client.table(_T_HISTORY)
+            client.table(tables.history)
             .select("*")
             .eq("reply_tweet_id", record["reply_tweet_id"])
             .limit(1)
             .execute()
         ).data or []
         if not rows:
-            return bool(client.table(_T_HISTORY).insert(record).execute().data)
+            return bool(client.table(tables.history).insert(record).execute().data)
         previous = rows[0]
-        if _blocked_row(previous):
+        if _blocked_row(previous, tables=tables):
             return False
         if record.get("mode") == "shadow" and previous.get("mode") == "live":
             return False
@@ -152,7 +191,7 @@ def insert_history(record: dict) -> bool:
             new_meta["previous_reason"] = previous.get("skip_reason")
             record = {**record, "error_message": json.dumps(new_meta, ensure_ascii=False)}
         query = (
-            client.table(_T_HISTORY)
+            client.table(tables.history)
             .update(record)
             .eq("reply_tweet_id", record["reply_tweet_id"])
             .eq("responded", False)
@@ -170,12 +209,14 @@ def insert_history(record: dict) -> bool:
         return False
 
 
-def claim_publication(reply_tweet_id: str, metadata: str) -> str | None:
+def claim_publication(
+    reply_tweet_id: str, metadata: str, *, tables: ReplyTables = X_TABLES
+) -> str | None:
     """Atomic READY -> PUBLISHING transition; return persisted attempt metadata."""
     try:
         client = get_client()
         rows = (
-            client.table(_T_HISTORY)
+            client.table(tables.history)
             .select("error_message")
             .eq("reply_tweet_id", reply_tweet_id)
             .limit(1)
@@ -194,7 +235,7 @@ def claim_publication(reply_tweet_id: str, metadata: str) -> str | None:
         )
         metadata = json.dumps(current, ensure_ascii=False)
         result = (
-            client.table(_T_HISTORY)
+            client.table(tables.history)
             .update({
                 "skip_reason": "PUBLISHING", "error_message": metadata,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -212,13 +253,15 @@ def claim_publication(reply_tweet_id: str, metadata: str) -> str | None:
         return None
 
 
-def mark_responded(reply_tweet_id: str, response_tweet_id: str) -> bool:
+def mark_responded(
+    reply_tweet_id: str, response_tweet_id: str, *, tables: ReplyTables = X_TABLES
+) -> bool:
     """발행 성공 기록을 최대 3회 저장한다 (idempotent DB update)."""
     for attempt in range(1, 4):
         try:
             result = (
                 get_client()
-                .table(_T_HISTORY)
+                .table(tables.history)
                 .update(
                     {
                         "responded": True,
@@ -241,12 +284,14 @@ def update_skip_reason(
     reply_tweet_id: str,
     skip_reason: str,
     error_message: str | None = None,
+    *,
+    tables: ReplyTables = X_TABLES,
 ) -> bool:
     """발행 단계 실패 사유 사후 기록 (PUBLISH_FAIL 등 — 감사추적용)."""
     try:
         result = (
             get_client()
-            .table(_T_HISTORY)
+            .table(tables.history)
             .update({"skip_reason": skip_reason, "error_message": error_message})
             .eq("reply_tweet_id", reply_tweet_id)
             .execute()
@@ -257,12 +302,14 @@ def update_skip_reason(
         return False
 
 
-def _count_today(column: str, value: str, responded_only: bool) -> int:
+def _count_today(
+    column: str, value: str, responded_only: bool, *, tables: ReplyTables = X_TABLES
+) -> int:
     """당일(KST) 이력 카운트 공통. 조회 실패 시 큰 값 반환 (보수적 차단)."""
     try:
         query = (
             get_client()
-            .table(_T_HISTORY)
+            .table(tables.history)
             .select("reply_tweet_id", count="exact")
             .gte("created_at", kst_day_start_utc_iso())
         )
@@ -279,28 +326,30 @@ def _count_today(column: str, value: str, responded_only: bool) -> int:
         return 10**9
 
 
-def count_author_responded_today(author_id: str) -> int:
+def count_author_responded_today(author_id: str, *, tables: ReplyTables = X_TABLES) -> int:
     """L4: 해당 사용자에게 오늘 발행한 답글 수."""
-    return _count_today("author_id", author_id, responded_only=True)
+    return _count_today("author_id", author_id, responded_only=True, tables=tables)
 
 
-def count_conversation_responded_today(conversation_id: str) -> int:
+def count_conversation_responded_today(
+    conversation_id: str, *, tables: ReplyTables = X_TABLES
+) -> int:
     """L5: 해당 대화에 오늘 발행한 답글 수."""
-    return _count_today("conversation_id", conversation_id, responded_only=True)
+    return _count_today("conversation_id", conversation_id, responded_only=True, tables=tables)
 
 
-def count_responded_today() -> int:
+def count_responded_today(*, tables: ReplyTables = X_TABLES) -> int:
     """일일 답글 상한 체크용 총 발행 수."""
-    return _count_today("", "", responded_only=True)
+    return _count_today("", "", responded_only=True, tables=tables)
 
 
-def get_history_metrics(days: int = 7) -> dict:
+def get_history_metrics(days: int = 7, *, tables: ReplyTables = X_TABLES) -> dict:
     """최근 이력의 전환율과 주요 차단 사유를 한 번의 DB 조회로 집계한다."""
     since = (datetime.now(UTC) - timedelta(days=max(1, days))).isoformat()
     try:
         result = (
             get_client()
-            .table(_T_HISTORY)
+            .table(tables.history)
             .select("responded,skip_reason,response_tweet_id")
             .eq("mode", "live")
             .gte("created_at", since)
@@ -335,19 +384,19 @@ def get_history_metrics(days: int = 7) -> dict:
         }
 
 
-def get_retryable_history(limit: int = 10) -> list[dict]:
+def get_retryable_history(limit: int = 10, *, tables: ReplyTables = X_TABLES) -> list[dict]:
     """Bounded oldest-first recovery of deferred decisions, never unknown publications."""
     try:
         limit = max(1, min(100, limit))
         result = (
             get_client()
-            .table(_T_HISTORY)
+            .table(tables.history)
             .select("*")
             .eq("mode", "live")
             .eq("responded", False)
             .is_("response_tweet_id", "null")
             .in_("skip_reason", sorted(DEFER_REASONS))
-            .gte("created_at", _retry_cutoff_iso())
+            .gte("created_at", _retry_cutoff_iso(tables=tables))
             .order("created_at")
             .limit(min(500, limit * 5))
             .execute()
@@ -365,7 +414,7 @@ def get_retryable_history(limit: int = 10) -> list[dict]:
                 )
                 if original.tzinfo is None:
                     original = original.replace(tzinfo=UTC)
-                if now - original > timedelta(hours=REPLY_MAX_AGE_HOURS):
+                if now - original > timedelta(hours=_max_age_hours(tables)):
                     continue
                 if int(meta.get("publish_attempts", 0)) >= 3:
                     continue
@@ -408,23 +457,33 @@ class HistoryLookup(set):
         self.rows = {}
 
 
-def history_exists_bulk(reply_tweet_ids: list[str]) -> set[str]:
+def history_exists_bulk(
+    reply_tweet_ids: list[str], *, tables: ReplyTables = X_TABLES
+) -> set[str]:
     ids = [i for i in dict.fromkeys(reply_tweet_ids) if i]
     found = HistoryLookup()
     try:
         for chunk in _chunks(ids):
             rows = (
-                get_client().table(_T_HISTORY).select("*").in_("reply_tweet_id", chunk).execute()
+                get_client()
+                .table(tables.history)
+                .select("*")
+                .in_("reply_tweet_id", chunk)
+                .execute()
             ).data or []
             found.rows.update({row["reply_tweet_id"]: row for row in rows})
-            found.update(row["reply_tweet_id"] for row in rows if _blocked_row(row))
+            found.update(
+                row["reply_tweet_id"] for row in rows if _blocked_row(row, tables=tables)
+            )
     except Exception as exc:
         logger.error("[Store] duplicate lookup failed: %s", exc)
         return set(ids)
     return found
 
 
-def _count_today_bulk(column: str, values: list[str]) -> dict[str, int]:
+def _count_today_bulk(
+    column: str, values: list[str], *, tables: ReplyTables = X_TABLES
+) -> dict[str, int]:
     """
     당일(KST) responded=True 이력을 컬럼값별로 집계.
     조회 실패 시 전건 큰 값 반환 (보수적 차단 — _count_today와 동일 정책).
@@ -438,7 +497,7 @@ def _count_today_bulk(column: str, values: list[str]) -> dict[str, int]:
         for chunk in _chunks(keys):
             result = (
                 get_client()
-                .table(_T_HISTORY)
+                .table(tables.history)
                 .select(column)
                 .gte("created_at", kst_day_start_utc_iso())
                 .or_(
@@ -457,22 +516,26 @@ def _count_today_bulk(column: str, values: list[str]) -> dict[str, int]:
     return counts
 
 
-def count_author_responded_today_bulk(author_ids: list[str]) -> dict[str, int]:
+def count_author_responded_today_bulk(
+    author_ids: list[str], *, tables: ReplyTables = X_TABLES
+) -> dict[str, int]:
     """L4 배치: 저자별 당일 발행 수."""
-    return _count_today_bulk("author_id", author_ids)
+    return _count_today_bulk("author_id", author_ids, tables=tables)
 
 
-def count_conversation_responded_today_bulk(conversation_ids: list[str]) -> dict[str, int]:
+def count_conversation_responded_today_bulk(
+    conversation_ids: list[str], *, tables: ReplyTables = X_TABLES
+) -> dict[str, int]:
     """L5 배치: 대화별 당일 발행 수."""
-    return _count_today_bulk("conversation_id", conversation_ids)
+    return _count_today_bulk("conversation_id", conversation_ids, tables=tables)
 
 
-def get_recent_response_texts(limit: int = 30) -> list[str]:
+def get_recent_response_texts(limit: int = 30, *, tables: ReplyTables = X_TABLES) -> list[str]:
     """L6 유사도 가드용 최근 발행 답글 텍스트. 실패 시 빈 리스트."""
     try:
         result = (
             get_client()
-            .table(_T_HISTORY)
+            .table(tables.history)
             .select("response_text")
             .eq("responded", True)
             .order("created_at", desc=True)
@@ -490,21 +553,25 @@ def get_recent_response_texts(limit: int = 30) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def get_cursor(account: str) -> dict | None:
+def get_cursor(account: str, *, tables: ReplyTables = X_TABLES) -> dict | None:
     """{since_id, my_user_id} 반환. 없으면 None."""
     try:
-        result = get_client().table(_T_CURSOR).select("*").eq("account", account).limit(1).execute()
+        result = (
+            get_client().table(tables.cursor).select("*").eq("account", account).limit(1).execute()
+        )
         return result.data[0] if result.data else None
     except Exception as exc:
         logger.error(f"[Store] get_cursor 실패: {exc}")
         return None
 
 
-def upsert_cursor(account: str, since_id: str, my_user_id: str) -> bool:
+def upsert_cursor(
+    account: str, since_id: str, my_user_id: str, *, tables: ReplyTables = X_TABLES
+) -> bool:
     try:
         result = (
             get_client()
-            .table(_T_CURSOR)
+            .table(tables.cursor)
             .upsert(
                 {
                     "account": account,
@@ -526,12 +593,12 @@ def upsert_cursor(account: str, since_id: str, my_user_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def get_budget(budget_date: str) -> dict:
+def get_budget(budget_date: str, *, tables: ReplyTables = X_TABLES) -> dict:
     """당일 예산 행 조회. 없으면 0으로 초기화된 dict (INSERT는 upsert_budget에서)."""
     try:
         result = (
             get_client()
-            .table(_T_BUDGET)
+            .table(tables.budget)
             .select("*")
             .eq("budget_date", budget_date)
             .limit(1)
@@ -551,11 +618,11 @@ def get_budget(budget_date: str) -> dict:
     }
 
 
-def upsert_budget(row: dict) -> bool:
+def upsert_budget(row: dict, *, tables: ReplyTables = X_TABLES) -> bool:
     try:
         row = dict(row)
         row["updated_at"] = datetime.now(UTC).isoformat()
-        result = get_client().table(_T_BUDGET).upsert(row).execute()
+        result = get_client().table(tables.budget).upsert(row).execute()
         return bool(result.data)
     except Exception as exc:
         logger.error(f"[Store] upsert_budget 실패: {exc}")
@@ -567,10 +634,10 @@ def upsert_budget(row: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def get_blacklist_ids() -> set[str]:
+def get_blacklist_ids(*, tables: ReplyTables = X_TABLES) -> set[str]:
     """블랙리스트 author_id 집합. 실패 시 빈 집합 (블랙리스트는 부가 방어층)."""
     try:
-        result = get_client().table(_T_BLACKLIST).select("author_id").execute()
+        result = get_client().table(tables.blacklist).select("author_id").execute()
         return {row["author_id"] for row in (result.data or [])}
     except Exception as exc:
         logger.error(f"[Store] blacklist 조회 실패: {exc}")
@@ -631,7 +698,9 @@ def parse_utc(value) -> datetime | None:
         return None
 
 
-def expire_deferred(account_user_id: str, *, now=None, limit: int = 500) -> dict:
+def expire_deferred(
+    account_user_id: str, *, now=None, limit: int = 500, tables: ReplyTables = X_TABLES
+) -> dict:
     """CAS-finalize only provably unattempted/explicitly rejected deferred rows.
 
     No created_at cutoff: old rows must be cleaned even after the recovery window.
@@ -642,7 +711,7 @@ def expire_deferred(account_user_id: str, *, now=None, limit: int = 500) -> dict
     if not account_user_id:
         return stats
     try:
-        rows = (get_client().table(_T_HISTORY).select("*")
+        rows = (get_client().table(tables.history).select("*")
                 .eq("mode", "live").eq("responded", False)
                 .is_("response_tweet_id", "null")
                 .in_("skip_reason", sorted(DEFER_REASONS))
@@ -659,15 +728,15 @@ def expire_deferred(account_user_id: str, *, now=None, limit: int = 500) -> dict
                 stats["invalid"] += 1
                 continue
             reason = None
-            if now - original > timedelta(hours=REPLY_MAX_AGE_HOURS):
+            if now - original > timedelta(hours=_max_age_hours(tables)):
                 reason = "EXPIRED_CAP" if "CAP" in row["skip_reason"] else "EXPIRED_DEFERRED"
-            elif now - recorded > timedelta(hours=REPLY_RETRY_WINDOW_HOURS):
+            elif now - recorded > timedelta(hours=_retry_window_hours(tables)):
                 reason = "EXPIRED_RETRY"
             if not reason:
                 continue
             metadata = {**meta, "previous_reason": row["skip_reason"],
                         "expired_at": now.isoformat(), "last_decision_at": now.isoformat()}
-            changed = (get_client().table(_T_HISTORY)
+            changed = (get_client().table(tables.history)
                        .update({"skip_reason": reason,
                                 "error_message": json.dumps(metadata, ensure_ascii=False)})
                        .eq("reply_tweet_id", row["reply_tweet_id"])
@@ -683,7 +752,7 @@ def expire_deferred(account_user_id: str, *, now=None, limit: int = 500) -> dict
 
 
 def persist_collected(tweets: list[dict], users: dict, account_user_id: str,
-                      run_id: str) -> bool:
+                      run_id: str, *, tables: ReplyTables = X_TABLES) -> bool:
     """Insert-only inbox using existing history; replay cannot replace any decision.
 
     Persist the entire fetched batch before advancing its cursor. On failure the
@@ -708,10 +777,63 @@ def persist_collected(tweets: list[dict], users: dict, account_user_id: str,
         })
     try:
         for offset in range(0, len(records), 100):
-            get_client().table(_T_HISTORY).upsert(
+            get_client().table(tables.history).upsert(
                 records[offset:offset + 100], on_conflict="reply_tweet_id", ignore_duplicates=True
             ).execute()
         return True
     except Exception as exc:
         logger.error("[Store] inbox persistence failed: %s", type(exc).__name__)
         return False
+
+
+# ---------------------------------------------------------------------------
+# 플랫폼 바인딩 (FB-1)
+# ---------------------------------------------------------------------------
+
+# 테이블을 참조하는 공용 함수. 좋아요 3종은 X 전용 기능이라 바인딩하지 않는다.
+_BINDABLE = (
+    "history_exists",
+    "insert_history",
+    "claim_publication",
+    "mark_responded",
+    "update_skip_reason",
+    "count_author_responded_today",
+    "count_conversation_responded_today",
+    "count_responded_today",
+    "get_history_metrics",
+    "get_retryable_history",
+    "history_exists_bulk",
+    "count_author_responded_today_bulk",
+    "count_conversation_responded_today_bulk",
+    "get_recent_response_texts",
+    "get_cursor",
+    "upsert_cursor",
+    "get_budget",
+    "upsert_budget",
+    "get_blacklist_ids",
+    "expire_deferred",
+    "persist_collected",
+)
+
+
+def bind(tables: ReplyTables) -> SimpleNamespace:
+    """``tables``가 고정된 store 뷰를 만든다.
+
+    호출 시점에 모듈 함수를 조회하므로 store 함수·get_client를 patch한 테스트가
+    바인딩 뷰에도 그대로 적용된다. X 테이블로의 바인딩은 금지한다(오배선 방지).
+    """
+    if tables.history == _T_HISTORY:
+        raise ValueError("bind() is for non-X namespaces; X uses module defaults")
+
+    def _late(name: str):
+        @functools.wraps(globals()[name])
+        def call(*args, **kwargs):
+            return globals()[name](*args, tables=tables, **kwargs)
+
+        return call
+
+    view = SimpleNamespace(**{name: _late(name) for name in _BINDABLE})
+    view.tables = tables
+    view.kst_today = kst_today
+    view.parse_utc = parse_utc
+    return view

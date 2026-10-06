@@ -27,6 +27,10 @@ v1.1.0 (2026-08-30, R-2/R-5):
     Notion 공통지침 '캡 이중 계수 규약'(2026-08-18)에 따라
     DB 스냅샷 + in-run 카운터 이중 계수로 재구성.
   R-5 배치 조회 — 후보 N건 × 3쿼리를 CapContext 1회 구성(3쿼리)으로 대체.
+
+v2.1.0 (2026-10-07, FB-1): 플랫폼 공통화.
+  check_tweet(max_age_hours=), build_cap_context(repo=), check_and_admit(repo=, caps=)
+  키워드 전용 인자를 추가했다. 미지정 시 기존 X 동작(모듈 store·config 상수)과 동일하다.
 """
 
 from __future__ import annotations
@@ -48,7 +52,7 @@ from reply_engine.config import (
 )
 from reply_engine.policy import REACTION_PATTERN
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +89,8 @@ def check_tweet(
     user: dict | None,
     my_user_id: str,
     blacklist: set[str],
+    *,
+    max_age_hours: int | None = None,
 ) -> tuple[bool, str | None]:
     """
     단건 필터 (DB 카운트 불필요한 정적 검사).
@@ -109,7 +115,8 @@ def check_tweet(
     created = _to_aware_utc(tweet.get("created_at"))
     if created is not None:
         age = datetime.now(UTC) - created
-        if age > timedelta(hours=REPLY_MAX_AGE_HOURS):
+        ttl = REPLY_MAX_AGE_HOURS if max_age_hours is None else max_age_hours
+        if age > timedelta(hours=ttl):
             return False, "EXPIRED"
 
     # 텍스트 휴리스틱 (멘션 핸들 제거 후 실질 텍스트 기준)
@@ -141,6 +148,14 @@ def check_tweet(
     return True, None
 
 
+@dataclass(frozen=True)
+class CapLimits:
+    """사용자·대화 일일 상한 (FB-1). 미지정 시 X config 상수를 사용한다."""
+
+    author_daily: int
+    conversation_daily: int
+
+
 @dataclass
 class CapContext:
     """
@@ -160,25 +175,38 @@ class CapContext:
     bulk_ready: bool = False
 
 
-def build_cap_context(tweets: list[dict], existing_ids: set[str] | None = None) -> CapContext:
+def build_cap_context(
+    tweets: list[dict],
+    existing_ids: set[str] | None = None,
+    *,
+    repo=None,
+) -> CapContext:
     """
     후보 트윗 목록으로 배치 스냅샷을 1회 구성한다 (DB 3쿼리 고정, R-5).
     정적 필터 통과 건에만 호출해 조회 대상을 최소화한다.
+    repo: store 호환 객체(FB는 store.bind 뷰). None이면 X store 모듈.
     """
+    repo = store if repo is None else repo
     ids = [t.get("id", "") for t in tweets]
     authors = [t.get("author_id", "") for t in tweets]
     convs = [t.get("conversation_id", "") for t in tweets]
-    existing = existing_ids if existing_ids is not None else store.history_exists_bulk(ids)
+    existing = existing_ids if existing_ids is not None else repo.history_exists_bulk(ids)
     return CapContext(
         existing_ids=existing,
         history_rows=getattr(existing, "rows", {}),
-        author_today=store.count_author_responded_today_bulk(authors),
-        conv_today=store.count_conversation_responded_today_bulk(convs),
+        author_today=repo.count_author_responded_today_bulk(authors),
+        conv_today=repo.count_conversation_responded_today_bulk(convs),
         bulk_ready=True,
     )
 
 
-def check_and_admit(tweet: dict, ctx: CapContext | None = None) -> tuple[bool, str | None]:
+def check_and_admit(
+    tweet: dict,
+    ctx: CapContext | None = None,
+    *,
+    repo=None,
+    caps: CapLimits | None = None,
+) -> tuple[bool, str | None]:
     """
     L1 중복 / L4 사용자 상한 / L5 대화 상한 판정.
 
@@ -197,18 +225,21 @@ def check_and_admit(tweet: dict, ctx: CapContext | None = None) -> tuple[bool, s
         author_base = ctx.author_today.get(author_id, 0)
         conv_base = ctx.conv_today.get(conversation_id, 0)
     else:
-        if store.history_exists(reply_tweet_id):
+        repo = store if repo is None else repo
+        if repo.history_exists(reply_tweet_id):
             return False, "DUP"
-        author_base = store.count_author_responded_today(author_id)
-        conv_base = store.count_conversation_responded_today(conversation_id)
+        author_base = repo.count_author_responded_today(author_id)
+        conv_base = repo.count_conversation_responded_today(conversation_id)
 
     author_run = ctx.author_run.get(author_id, 0) if ctx is not None else 0
     conv_run = ctx.conv_run.get(conversation_id, 0) if ctx is not None else 0
+    author_cap = REPLY_AUTHOR_DAILY_CAP if caps is None else caps.author_daily
+    conv_cap = REPLY_CONV_DAILY_CAP if caps is None else caps.conversation_daily
 
-    if author_base + author_run >= REPLY_AUTHOR_DAILY_CAP:
+    if author_base + author_run >= author_cap:
         return False, "AUTHOR_CAP_RUN" if author_run else "AUTHOR_CAP"
 
-    if conv_base + conv_run >= REPLY_CONV_DAILY_CAP:
+    if conv_base + conv_run >= conv_cap:
         return False, "CONV_CAP_RUN" if conv_run else "CONV_CAP"
 
     if ctx is not None:

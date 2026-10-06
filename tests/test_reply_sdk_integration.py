@@ -73,6 +73,10 @@ class OfflineServices:
                 "kr_reply_history": "reply_tweet_id",
                 "kr_reply_cursor": "account",
                 "kr_reply_budget": "budget_date",
+                # FB-1: Facebook 미러 테이블 (tests/test_fb_reply_pipeline.py가 재사용)
+                "fb_reply_history": "reply_tweet_id",
+                "fb_reply_cursor": "account",
+                "fb_reply_budget": "budget_date",
             }.get(table, "reply_tweet_id")
             rows = []
             for body in bodies:

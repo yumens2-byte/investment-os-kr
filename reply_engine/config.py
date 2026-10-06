@@ -28,13 +28,16 @@ v1.3.0 (2026-08-30, R-10/B): env_bool 헬퍼 신설.
 
 v1.4.0 (2026-09-04, R-11): REPLY_RETRY_WINDOW_HOURS 신설 (발행 실패 재시도 창).
 v1.5.0 (2026-09-10): 회당 발행 상한을 추가하고 운영 상한을 유효 범위로 제한.
+v2.1.0 (2026-10-07, FB-1): is_enabled(var=) / get_mode(var=) 키워드 인자 추가.
+  기본값은 REPLY_ENABLED / REPLY_MODE 그대로이며, Facebook은 FACE_REPLY_* 변수로
+  같은 엄격 판독 규칙(정확히 'true', 인식 불가 모드는 dry_run 강등)을 재사용한다.
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -213,9 +216,9 @@ REPLY_LINK_REVIEW_ENABLED: bool = env_bool("REPLY_LINK_REVIEW_ENABLED", False)
 # ---------------------------------------------------------------------------
 
 
-def is_enabled() -> bool:
-    """긴급 정지 스위치. REPLY_ENABLED가 정확히 'true'일 때만 동작."""
-    return os.environ.get("REPLY_ENABLED", "").strip().lower() == "true"
+def is_enabled(var: str = "REPLY_ENABLED") -> bool:
+    """긴급 정지 스위치. 변수(기본 REPLY_ENABLED)가 정확히 'true'일 때만 동작."""
+    return os.environ.get(var, "").strip().lower() == "true"
 
 
 def is_like_enabled() -> bool:
@@ -223,9 +226,9 @@ def is_like_enabled() -> bool:
     return env_bool("REPLY_LIKE_ENABLED", False)
 
 
-def get_mode() -> str:
-    """REPLY_MODE 판독. 인식 불가 값은 dry_run으로 강등 (fail-safe)."""
-    mode = os.environ.get("REPLY_MODE", "dry_run").strip().lower()
+def get_mode(var: str = "REPLY_MODE") -> str:
+    """모드 판독(기본 REPLY_MODE). 인식 불가 값은 dry_run으로 강등 (fail-safe)."""
+    mode = os.environ.get(var, "dry_run").strip().lower()
     if mode not in ("dry_run", "shadow", "live"):
         return "dry_run"
     return mode

@@ -136,10 +136,10 @@ def test_q3_prompt_neutral_rule(monkeypatch):
 
 
 def test_versions_ops_hardening():
-    assert run_reply.VERSION == "2.1.0"
-    assert filter_mod.VERSION == "2.0.0"
-    assert config.VERSION == "2.0.0"
-    assert store.VERSION == "2.1.0"
+    assert run_reply.VERSION == "2.2.0"
+    assert filter_mod.VERSION == "2.1.0"
+    assert config.VERSION == "2.1.0"
+    assert store.VERSION == "2.2.0"
     assert x_client.VERSION == "2.0.0"
-    assert generator.VERSION == "2.1.0"
+    assert generator.VERSION == "2.2.0"
     assert alert.VERSION == "1.0.0"

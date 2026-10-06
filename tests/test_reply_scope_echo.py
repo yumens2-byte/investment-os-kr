@@ -182,8 +182,8 @@ def test_versions_bumped_p_series():
     """P-1/P-2 반영 버전 확인 (지침 5)."""
     from reply_engine import config
 
-    assert run_reply.VERSION == "2.1.0"
+    assert run_reply.VERSION == "2.2.0"
     assert x_client.VERSION == "2.0.0"
     assert gate.VERSION == "2.1.0"
-    assert generator.VERSION == "2.1.0"
-    assert config.VERSION == "2.0.0"
+    assert generator.VERSION == "2.2.0"
+    assert config.VERSION == "2.1.0"

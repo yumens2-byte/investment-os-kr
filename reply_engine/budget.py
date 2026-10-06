@@ -11,6 +11,11 @@ reply_engine/budget.py
                write_calls < FALLBACK_WRITE_CALLS_PER_DAY (5)
 
 Gemini 무료 키 체인은 비용 0으로 취급하되 호출 수는 gemini_calls로 추적한다.
+
+v1.1.0 (2026-10-07, FB-1): 플랫폼 공통화.
+  BudgetGuard(costs=, limit_krw=, fallback=, cost_labels=) 키워드 전용 인자 추가.
+  미지정 시 X 환경변수·상수를 사용하므로 기존 동작과 동일하다.
+  Facebook은 단가가 없으므로 costs=(None, None)로 count 모드만 사용한다.
 """
 
 from __future__ import annotations
@@ -24,7 +29,7 @@ from reply_engine.config import (
     get_daily_budget_krw,
 )
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -32,23 +37,34 @@ logger = logging.getLogger(__name__)
 class BudgetGuard:
     """당일 예산 행(dict)을 감싸는 판정기. 영속화는 store가 담당."""
 
-    def __init__(self, budget_row: dict):
+    def __init__(
+        self,
+        budget_row: dict,
+        *,
+        costs: tuple[float | None, float | None] | None = None,
+        limit_krw: float | None = None,
+        fallback: tuple[int, int] | None = None,
+        cost_labels: tuple[str, str] = ("X_READ_COST_KRW", "X_WRITE_COST_KRW"),
+    ):
         self.row = dict(budget_row)
         self._initial_row = dict(budget_row)
-        self.read_cost, self.write_cost = get_cost_per_call()
-        self.limit_krw = get_daily_budget_krw()
+        self.read_cost, self.write_cost = get_cost_per_call() if costs is None else costs
+        self.limit_krw = get_daily_budget_krw() if limit_krw is None else float(limit_krw)
+        if fallback is None:
+            fallback = (FALLBACK_READ_CALLS_PER_DAY, FALLBACK_WRITE_CALLS_PER_DAY)
+        self.fallback_read, self.fallback_write = fallback
         self.cost_mode = self.read_cost is not None and self.write_cost is not None
         self.config_warnings: list[str] = []
         if not self.cost_mode:
             logger.warning(
                 "[Budget] 단가 미설정 → count 모드 fallback "
-                f"(read≤{FALLBACK_READ_CALLS_PER_DAY}, write≤{FALLBACK_WRITE_CALLS_PER_DAY})"
+                f"(read≤{self.fallback_read}, write≤{self.fallback_write})"
             )
         else:
             # 단가 오설정 감지 (B-2): 콜 1회 단가가 일일예산 이상이면 사실상 전면 차단됨.
             # 정상 단가는 예산 대비 수십분의 일 수준이어야 함 (2026-08-17 오입력 사고 재발 방지)
-            for label, cost in (("X_READ_COST_KRW", self.read_cost),
-                                ("X_WRITE_COST_KRW", self.write_cost)):
+            for label, cost in ((cost_labels[0], self.read_cost),
+                                (cost_labels[1], self.write_cost)):
                 if cost >= self.limit_krw:
                     msg = (
                         f"CONFIG WARNING: {label}={cost} ≥ DAILY_BUDGET_KRW={self.limit_krw} "
@@ -90,7 +106,7 @@ class BudgetGuard:
             projected = float(self.row["est_cost_krw"]) + self.read_cost
             allowed = projected <= self.limit_krw
         else:
-            allowed = int(self.row["read_calls"]) < FALLBACK_READ_CALLS_PER_DAY
+            allowed = int(self.row["read_calls"]) < self.fallback_read
         if not allowed:
             logger.warning(f"[Budget] 읽기 차단: {self._snapshot()}")
         return allowed
@@ -103,7 +119,7 @@ class BudgetGuard:
                 return maximum
             remaining = max(0.0, self.limit_krw - float(self.row["est_cost_krw"]))
             return min(maximum, int(remaining // self.read_cost))
-        remaining = max(0, FALLBACK_READ_CALLS_PER_DAY - int(self.row["read_calls"]))
+        remaining = max(0, self.fallback_read - int(self.row["read_calls"]))
         return min(maximum, remaining)
 
     def can_write(self) -> bool:
@@ -111,7 +127,7 @@ class BudgetGuard:
             projected = float(self.row["est_cost_krw"]) + self.write_cost
             allowed = projected <= self.limit_krw
         else:
-            allowed = int(self.row["write_calls"]) < FALLBACK_WRITE_CALLS_PER_DAY
+            allowed = int(self.row["write_calls"]) < self.fallback_write
         if not allowed:
             logger.warning(f"[Budget] 쓰기 차단: {self._snapshot()}")
         return allowed
