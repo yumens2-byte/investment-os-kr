@@ -58,7 +58,7 @@ def test_g1_market_cheer_replies_pass_gates():
     from reply_engine import gate
 
     for reply, comment in (
-        ("같은 마음입니다 🙂", "가자 돈복사!!!"),
+        ("댓글 잘 봤어요", "가자 돈복사!!!"),
         ("함께 지켜보시죠 🙂", "슈드 잘 가네요 ㅋ"),
     ):
         ok, reason = gate.check_reply(reply, [], comment_text=comment)
@@ -67,7 +67,7 @@ def test_g1_market_cheer_replies_pass_gates():
 
 def test_g1_version_bumped():
     """G-1 반영 버전 확인 (지침 5)."""
-    assert generator.VERSION == "2.0.0"
+    assert generator.VERSION == "2.1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -123,4 +123,4 @@ def test_g2_fallback_still_deterministic():
 
 
 def test_g2_version_bumped():
-    assert generator.VERSION == "2.0.0"
+    assert generator.VERSION == "2.1.0"

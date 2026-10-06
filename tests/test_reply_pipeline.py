@@ -176,6 +176,7 @@ class _MemStore:
         monkeypatch.setattr(store, "claim_publication", self._claim)
         monkeypatch.setattr(store, "update_skip_reason", self._update_skip)
         monkeypatch.setattr(store, "count_responded_today", lambda: self.responded_count)
+        monkeypatch.setattr(store, "expire_deferred", lambda _account: {"expired": 0})
         monkeypatch.setattr(store, "get_retryable_history", lambda _limit=10: [])
         monkeypatch.setattr(
             store,

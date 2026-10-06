@@ -35,7 +35,7 @@ class OfflineServices:
     @staticmethod
     def matches(row, params):
         for name, expression in params.items():
-            if name in {"select", "order", "limit", "offset", "on_conflict"}:
+            if name in {"select", "order", "limit", "offset", "on_conflict", "columns"}:
                 continue
             if name == "or":
                 if not (
@@ -82,6 +82,10 @@ class OfflineServices:
                 ):
                     old.update(body)
                     rows.append(old)
+                elif old is not None and "resolution=ignore-duplicates" in request.headers.get(
+                    "Prefer", ""
+                ):
+                    continue
                 elif old is not None:
                     return httpx.Response(409, json={"message": "duplicate key", "code": "23505"})
                 else:
@@ -403,3 +407,55 @@ def test_real_sdk_historical_quality_replay_only_mutates_budget(services):
         request for request in services.db_requests[request_offset:] if request.method != "GET"
     ]
     assert mutations and all(request.url.path.endswith("/kr_reply_budget") for request in mutations)
+
+
+
+def test_collector_to_worker_and_duplicate_collection(services, monkeypatch):
+    from scripts import collect_reply
+
+    monkeypatch.setenv("REPLY_COLLECTOR_ENABLED", "true")
+    services.add_mention("500")
+    collected = collect_reply.main()
+    assert collected["success"] and collected["collected"] == 1
+    assert services.post_count == 0 and services.model_requests == []
+    row = services.tables["kr_reply_history"][0]
+    assert row["skip_reason"] == "RECEIVED"
+    processed = run_reply.main()
+    assert processed["collected"] == 0 and processed["recovered_failures"] == 1
+    assert processed["actual_published"] == 1
+    published = deepcopy(row)
+    services.tables["kr_reply_cursor"].clear()
+    assert collect_reply.main()["success"]
+    assert services.tables["kr_reply_history"] == [published]
+    assert run_reply.main()["actual_published"] == 0
+    assert services.post_count == 1
+
+
+def test_collector_failure_preserves_cursor_and_replay_recovers(services, monkeypatch):
+    from scripts import collect_reply
+
+    monkeypatch.setenv("REPLY_COLLECTOR_ENABLED", "true")
+    services.add_mention("500")
+    original = store.persist_collected
+    monkeypatch.setattr(store, "persist_collected", lambda *_: False)
+    assert collect_reply.main()["exit_reason"] == "INBOX_SAVE_FAILED"
+    assert services.tables.get("kr_reply_cursor", []) == []
+    assert services.post_count == 0
+    monkeypatch.setattr(store, "persist_collected", original)
+    assert collect_reply.main()["success"]
+    assert run_reply.main()["actual_published"] == 1
+    assert services.post_count == 1
+
+
+def test_worker_sweeps_expired_collected_candidate_without_publication(services, monkeypatch):
+    from scripts import collect_reply
+
+    monkeypatch.setenv("REPLY_COLLECTOR_ENABLED", "true")
+    services.add_mention("500")
+    services.mentions[0]["created_at"] = (
+        datetime.now(UTC) - timedelta(hours=run_reply.filter_mod.REPLY_MAX_AGE_HOURS + 1)
+    ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    assert collect_reply.main()["success"]
+    assert run_reply.main()["actual_published"] == 0
+    assert services.tables["kr_reply_history"][0]["skip_reason"] == "EXPIRED_DEFERRED"
+    assert services.post_count == 0 and services.model_requests == []
