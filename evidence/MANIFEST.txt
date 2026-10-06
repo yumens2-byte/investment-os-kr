@@ -1,8 +1,8 @@
-FB-1 패키지 매니페스트 (기준 main 352db47 → 브랜치 feat/fb-reply-engine c4b907a)
+FB-1 패키지 매니페스트 (기준 main 352db47 → feat/fb-reply-engine 419499f, 커밋 2건)
 
 [investment-os-kr_FB-1_code.zip] 32 files
-  f92df690c54c7af7  docs/FB_REPLY_ENGINE.md
-  00233a57e7e908a2  docs/sql/fb_reply_tables.sql
+  82ed7854f181fbca  docs/FB_REPLY_ENGINE.md
+  55c9bca361dc31df  docs/sql/fb_reply_tables.sql
   a71fc1981eaef068  reply_engine/budget.py
   72a2c0a81da47637  reply_engine/config.py
   9f731ecb9b40374b  reply_engine/db_audit.py
@@ -35,6 +35,6 @@ FB-1 패키지 매니페스트 (기준 main 352db47 → 브랜치 feat/fb-reply-
   92e282c11ce3f3ac  tests/test_reply_sdk_integration.py
 
 [investment-os-kr_FB-1_workflows.zip] 2 files
-  a2428019927a7fbe  .github/workflows/fb_reply_engine.yml
+  7a02048d6c851797  .github/workflows/fb_reply_engine.yml
   34bf003046776cf6  .github/workflows/reply_engine_ci.yml
 

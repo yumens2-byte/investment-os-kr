@@ -1,0 +1,8 @@
+운영 Supabase(ccomoimhhttaklfadaos) 적용 이력 — 2026-10-07
+1) migration fb1_fb_reply_tables : fb_reply_* 4테이블 생성 (컬럼 28개 kr_reply_*와 동일 확인)
+2) migration fb1_fb_reply_tables_anon_access : 마스터 결정(SUPABASE_KEY=anon 사용)
+   - RLS 해제(4테이블), anon: history/cursor/budget SELECT·INSERT·UPDATE, blacklist SELECT
+   - authenticated 권한 0, DELETE/TRUNCATE 미부여
+3) anon 역할 트랜잭션 검증(롤백): history insert + CAS update=1, select=1, cursor/budget upsert ok,
+   blacklist select ok, DELETE=denied(42501), blacklist INSERT=denied(42501). 잔여 행 0건.
+4) 레포 docs/sql/fb_reply_tables.sql 최종본을 로컬 PostgreSQL 16에 2회 적용 → 운영과 RLS·anon 권한 동일

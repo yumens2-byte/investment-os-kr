@@ -1,7 +1,7 @@
 From c4b907a17238ea48cee4d5ce276c930cae11f6e3 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 02:34:49 +0900
-Subject: [PATCH] =?UTF-8?q?feat(fb-1):=20Facebook=20Page=20=EB=8C=93?=
+Subject: [PATCH 1/2] =?UTF-8?q?feat(fb-1):=20Facebook=20Page=20=EB=8C=93?=
  =?UTF-8?q?=EA=B8=80=20=EC=9E=90=EB=8F=99=EB=8B=B5=EA=B8=80=20=E2=80=94=20?=
  =?UTF-8?q?X=20Reply=20Engine=20=ED=8C=90=EB=8B=A8=20=EB=A1=9C=EC=A7=81=20?=
  =?UTF-8?q?=EA=B3=B5=ED=86=B5=ED=99=94?=
@@ -4802,6 +4802,126 @@ index a12cb68..9977d06 100644
              }.get(table, "reply_tweet_id")
              rows = []
              for body in bodies:
+-- 
+2.43.0
+
+
+From 419499f67361015f54593ca51149c02d2c3fcd50 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 06:35:41 +0900
+Subject: [PATCH 2/2] =?UTF-8?q?fix(fb-1):=20FB=20DB=20=EC=A0=91=EA=B7=BC?=
+ =?UTF-8?q?=EC=9D=84=20=EA=B8=B0=EC=A1=B4=20SUPABASE=5FKEY(anon)=EB=A1=9C?=
+ =?UTF-8?q?=20=EC=A0=95=EC=A0=95?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 마스터 결정: 레포 Secret SUPABASE_KEY(레포 기록상 anon 키) 사용
+- fb_reply_*: RLS 해제, anon 최소 권한(history/cursor/budget SELECT·INSERT·UPDATE,
+  blacklist SELECT), DELETE/TRUNCATE·authenticated 미부여
+- 운영 적용: migration fb1_fb_reply_tables_anon_access, anon 역할 검증(롤백)
+- 워크플로 3곳 SUPABASE_KEY, SQL·문서 최종 상태 일치
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QWPJVJsjbqhJ7AD6Yj3eWU
+---
+ .github/workflows/fb_reply_engine.yml |  6 +++---
+ docs/FB_REPLY_ENGINE.md               |  4 ++--
+ docs/sql/fb_reply_tables.sql          | 18 ++++++++++++------
+ 3 files changed, 17 insertions(+), 11 deletions(-)
+
+diff --git a/.github/workflows/fb_reply_engine.yml b/.github/workflows/fb_reply_engine.yml
+index 042d1d7..691032e 100644
+--- a/.github/workflows/fb_reply_engine.yml
++++ b/.github/workflows/fb_reply_engine.yml
+@@ -143,7 +143,7 @@ jobs:
+       - name: Audit fb_reply_* tables
+         env:
+           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+-          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
++          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}  # 마스터 결정(2026-10-07): 기존 anon 키 사용
+         run: python -m scripts.check_fb_reply_db
+       - name: Upload audit
+         if: always()
+@@ -199,7 +199,7 @@ jobs:
+       - name: Cross-check FB Supabase schema
+         env:
+           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+-          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
++          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}  # 마스터 결정(2026-10-07): 기존 anon 키 사용
+           FACE_REPLY_ENABLED_RAW: ${{ vars.FACE_REPLY_ENABLED }}
+         run: |
+           normalized="$(printf '%s' "$FACE_REPLY_ENABLED_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+@@ -216,7 +216,7 @@ jobs:
+           FACE_PAGE_TOKEN: ${{ secrets.FACE_PAGE_TOKEN }}
+ 
+           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+-          SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY }}  # RLS 테이블 — service_role 전용 (anon fallback 없음)
++          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}  # 마스터 결정(2026-10-07): 기존 anon 키 사용
+ 
+           # Gemini 무료 3키만 주입 (유료 PAY 키 미주입 — 코드도 allow_paid=False)
+           GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+diff --git a/docs/FB_REPLY_ENGINE.md b/docs/FB_REPLY_ENGINE.md
+index c9e83fa..3092f8e 100644
+--- a/docs/FB_REPLY_ENGINE.md
++++ b/docs/FB_REPLY_ENGINE.md
+@@ -91,7 +91,7 @@ Graph comments에는 since_id가 없다. 따라서 신규 판정은 커서가 
+ | 구분 | 이름 | 기본 |
+ |---|---|---|
+ | Secret | FACE_PAGE_ID, FACE_PAGE_TOKEN | 필수 |
+-| Secret (재사용) | SUPABASE_URL, SUPABASE_REPLY_SERVICE_ROLE_KEY, GEMINI_API_KEY / _SUB_KEY / _SUB_SUB_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALERT_CHAT_ID | — |
++| Secret (재사용) | SUPABASE_URL, SUPABASE_KEY, GEMINI_API_KEY / _SUB_KEY / _SUB_SUB_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALERT_CHAT_ID | — |
+ | Variable | FACE_REPLY_ENABLED / FACE_REPLY_MODE | false / dry_run |
+ | Variable | FACE_REPLY_DAILY_CAP / _RUN_CAP(1~5) / _AUTHOR_DAILY_CAP / _POST_DAILY_CAP | 5 / 1 / 1 / 2 |
+ | Variable | FACE_REPLY_MAX_AGE_HOURS / _RETRY_WINDOW_HOURS | 24 / 24 |
+@@ -100,7 +100,7 @@ Graph comments에는 since_id가 없다. 따라서 신규 판정은 커서가 
+ | Variable | FACE_REPLY_READ_CALLS_PER_DAY / _WRITE_CALLS_PER_DAY / _BUC_STOP_PCT | 120 / 10 / 80 |
+ | Variable | FACE_REPLY_RELEASE_SHA | 승인 SHA 고정 운영 시 |
+ 
+-Supabase 키 주의: FB 테이블은 RLS가 켜져 있고 anon 권한이 회수되어 있다. 따라서 FB 워크플로는 `SUPABASE_REPLY_SERVICE_ROLE_KEY`만 사용하며 anon fallback이 없다.
++Supabase 키 (2026-10-07 마스터 결정): FB 워크플로는 기존 Secret `SUPABASE_KEY`(레포 기록상 anon 키, REPLY_ENGINE_V2_RESIDUAL.md:79·100)를 사용한다. `fb_reply_*`는 kr_reply_*와 같이 RLS를 해제했다. 다만 anon에는 엔진에 필요한 최소 권한만 있다: history·cursor·budget은 SELECT/INSERT/UPDATE, blacklist는 SELECT. DELETE·TRUNCATE와 authenticated 권한은 없다. 운영 DB에서 anon 역할로 INSERT/CAS UPDATE/upsert/SELECT 성공, DELETE·blacklist INSERT 거부(42501)를 검증했다(롤백, 잔여 0건). 블랙리스트 등록은 Supabase 대시보드(관리자)에서 한다.
+ 
+ ## 6. 미확정 (Preflight 실측 항목)
+ 
+diff --git a/docs/sql/fb_reply_tables.sql b/docs/sql/fb_reply_tables.sql
+index 4be3a2d..2e41405 100644
+--- a/docs/sql/fb_reply_tables.sql
++++ b/docs/sql/fb_reply_tables.sql
+@@ -5,8 +5,11 @@
+ -- 공통 store(reply_engine/store.py)의 CAS/claim/복구 코드를 테이블명만 바꿔 재사용하기 위함.
+ -- 컬럼 의미 매핑: reply_tweet_id = FB comment id, response_tweet_id = 내 답글 comment id,
+ --                 conversation_id = FB post id, author_id = Page 범위 사용자 ID(PSID).
+--- 보안: RLS 활성 + anon/authenticated 권한 회수 → service_role 키 전용
+---       (마스터 기준: RLS 테이블은 service_role 필수. kr_reply_*와 달리 anon 노출 없음)
++-- 보안 (2026-10-07 마스터 결정): 레포 Secret SUPABASE_KEY(anon 키)를 그대로 사용한다.
++--       kr_reply_*와 같이 RLS는 해제하되, anon에는 엔진에 필요한 최소 권한만 부여한다
++--       (history·cursor·budget = SELECT/INSERT/UPDATE, blacklist = SELECT. DELETE/TRUNCATE 없음).
++--       authenticated 권한은 부여하지 않는다.
++-- 운영 적용 이력: migration fb1_fb_reply_tables → fb1_fb_reply_tables_anon_access (최종 상태 = 이 파일)
+ -- kr_reply_* 테이블은 이 스크립트에서 일절 변경하지 않는다.
+ -- ============================================================================
+ 
+@@ -64,13 +67,16 @@ COMMENT ON COLUMN public.fb_reply_history.response_tweet_id IS '내 Page가 단
+ COMMENT ON COLUMN public.fb_reply_history.conversation_id   IS 'Facebook post id (게시물 단위 일일 상한)';
+ COMMENT ON COLUMN public.fb_reply_history.author_id         IS 'Page 범위 사용자 ID (PSID). 실명은 저장하지 않음';
+ 
+-ALTER TABLE public.fb_reply_history   ENABLE ROW LEVEL SECURITY;
+-ALTER TABLE public.fb_reply_cursor    ENABLE ROW LEVEL SECURITY;
+-ALTER TABLE public.fb_reply_budget    ENABLE ROW LEVEL SECURITY;
+-ALTER TABLE public.fb_reply_blacklist ENABLE ROW LEVEL SECURITY;
++ALTER TABLE public.fb_reply_history   DISABLE ROW LEVEL SECURITY;
++ALTER TABLE public.fb_reply_cursor    DISABLE ROW LEVEL SECURITY;
++ALTER TABLE public.fb_reply_budget    DISABLE ROW LEVEL SECURITY;
++ALTER TABLE public.fb_reply_blacklist DISABLE ROW LEVEL SECURITY;
+ 
+ REVOKE ALL ON public.fb_reply_history, public.fb_reply_cursor,
+               public.fb_reply_budget, public.fb_reply_blacklist FROM anon, authenticated;
++GRANT SELECT, INSERT, UPDATE ON public.fb_reply_history, public.fb_reply_cursor,
++                                public.fb_reply_budget TO anon;
++GRANT SELECT ON public.fb_reply_blacklist TO anon;
+ GRANT SELECT, INSERT, UPDATE ON public.fb_reply_history, public.fb_reply_cursor,
+                                 public.fb_reply_budget TO service_role;
+ GRANT SELECT, INSERT, UPDATE, DELETE ON public.fb_reply_blacklist TO service_role;
 -- 
 2.43.0
 
