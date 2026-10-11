@@ -308,6 +308,63 @@ def test_real_pipeline_live_claim_publish_commit_cursor(services):
     assert result["review"][0]["parent_preview"] == "시장 정보 원문"
 
 
+@pytest.mark.parametrize("mode", ["live", "shadow", "dry_run"])
+def test_role_reversal_replaced_across_real_sdk_modes(services, monkeypatch, mode):
+    """Exercise collection, model parsing, gate, claim and record via SDK transports."""
+    monkeypatch.setenv("REPLY_MODE", mode)
+    services.add_mention("500", text="이런 지표 정리 덕분에 한눈에 파악할 수 있네요")
+    original = services.generate
+
+    def reversed_draft(*, contents, **kwargs):
+        result = original(contents=contents, **kwargs)
+        if any(line.startswith('{"id":') for line in contents.splitlines()):
+            result.text = json.dumps([{"id": "500", "reply": "지표 정리 감사합니다 😊"}])
+        return result
+
+    monkeypatch.setattr(services, "generate", reversed_draft)
+    result = run_reply.main()
+    review = result["review"][0]
+    assert review["draft_gate_reason"] == "GATE_ROLE_REVERSAL"
+    assert review["source"] == "TEMPLATE_FALLBACK"
+    assert review["reply_text"] != "지표 정리 감사합니다 😊"
+    assert result["actual_published"] == int(mode == "live")
+    assert result["simulated"] == int(mode != "live")
+    assert services.post_count == int(mode == "live")
+    if mode == "dry_run":
+        assert not any(r.method != "GET" for r in services.db_requests)
+    else:
+        row = services.tables["kr_reply_history"][0]
+        assert row["response_text"] == review["reply_text"]
+        assert row["responded"] is (mode == "live")
+        assert bool(row["response_tweet_id"]) is (mode == "live")
+        if mode == "live":
+            sent = next(kw["json"]["text"] for method, _, kw in services.x_requests
+                        if method == "POST")
+            assert sent == row["response_text"]
+
+
+def test_role_reversal_without_safe_fallback_never_claims_or_posts(services, monkeypatch):
+    from reply_engine import generator
+
+    services.add_mention("500", text="지표 정리 덕분에 한눈에 이해돼요")
+    original = services.generate
+
+    def reversed_draft(*, contents, **kwargs):
+        result = original(contents=contents, **kwargs)
+        if any(line.startswith('{"id":') for line in contents.splitlines()):
+            result.text = json.dumps([{"id": "500", "reply": "지표 정리 감사합니다 😊"}])
+        return result
+
+    monkeypatch.setattr(services, "generate", reversed_draft)
+    monkeypatch.setattr(generator, "contextual_fallbacks", lambda _: ())
+    result = run_reply.main()
+    assert result["skip_reasons"] == {"GATE_ROLE_REVERSAL": 1}
+    assert services.post_count == 0 and result["publish_attempts"] == 0
+    row = services.tables["kr_reply_history"][0]
+    assert row["skip_reason"] == "GATE_ROLE_REVERSAL"
+    assert not row["responded"] and row["response_tweet_id"] is None
+
+
 def test_real_pipeline_timeout_is_durable_and_replay_blocked(services):
     services.add_mention("500")
     services.timeout = True
