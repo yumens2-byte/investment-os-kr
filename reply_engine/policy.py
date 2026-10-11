@@ -100,6 +100,8 @@ def intent_for(text: str, label: str) -> str:
         return "LAUGH"
     if any(word in body for word in ("감사", "고맙", "고마워")):
         return "THANKS"
+    if praises_our_content(body):
+        return "PRAISE"
     if label == "POSITIVE" and (
         any(word in body for word in ("잘 봤", "잘봤", "유익", "즐감"))
         or re.search(r"(?:잘|재미\s*있게)\s*보(?:고|았|겠)|참고\s*잘", body)
@@ -108,6 +110,14 @@ def intent_for(text: str, label: str) -> str:
         return "PRAISE"
     # Never infer agreement with a market prediction from an ambiguous reaction.
     return "ACK"
+
+
+def praises_our_content(text: str) -> bool:
+    """Recognize explicit benefit from our content, not the reader's contribution."""
+    body = re.sub(r"@\w+", "", text or "").strip()
+    content = r"(?:지표|자료|정리|글|설명|분석|콘텐츠|정보)"
+    benefit = r"(?:덕분|도움|유익|한눈에|이해.*(?:쉽|잘)|파악.*수\s*있)"
+    return bool(re.search(content + r".*" + benefit, body))
 
 
 def decode_metadata(raw: str | None) -> dict:

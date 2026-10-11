@@ -20,8 +20,9 @@ from reply_engine.facebook import config as fbc
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# 2026-10-07 공통화 직전(main 352db47) 원본 프롬프트 sha256 — X 바이트 보존 증명.
-X_GENERATOR_PROMPT_SHA256 = "9f0e0f17260af4c76d045bda50c2e2b25bb1f6ff1714ed9aae4bb5d8d3e3329a"
+# 2026-10-11 역할 반전 방지 지침을 명시적으로 추가한 생성 프롬프트 기준.
+# 분류 프롬프트는 2026-10-07 공통화 직전(main 352db47) 원본을 유지한다.
+X_GENERATOR_PROMPT_SHA256 = "11d5c831a3427e1159315b9dc7e0ddbcbb81b8f9ff34cf594d5b9b968ebca912"
 X_CLASSIFIER_PROMPT_SHA256 = "cab72b465686c338af8d8582f8466db6c146773bd8cb958f97c79bde06586c90"
 
 _GEN_ITEMS = [
