@@ -100,6 +100,8 @@ def intent_for(text: str, label: str) -> str:
         return "LAUGH"
     if any(word in body for word in ("감사", "고맙", "고마워")):
         return "THANKS"
+    if reader_contributes_content(body):
+        return "ACK"
     if praises_our_content(body):
         return "PRAISE"
     if label == "POSITIVE" and (
@@ -114,10 +116,28 @@ def intent_for(text: str, label: str) -> str:
 
 def praises_our_content(text: str) -> bool:
     """Recognize explicit benefit from our content, not the reader's contribution."""
-    body = re.sub(r"@\w+", "", text or "").strip()
+    body = normalize_comment(text)
+    if reader_contributes_content(body):
+        return False
+    if re.search(r"도움(?:이|은|도)?\s*(?:안|없)|유익하지\s*않", body):
+        return False
     content = r"(?:지표|자료|정리|글|설명|분석|콘텐츠|정보)"
     benefit = r"(?:덕분|도움|유익|한눈에|이해.*(?:쉽|잘)|파악.*수\s*있)"
     return bool(re.search(content + r".*" + benefit, body))
+
+
+def normalize_comment(text: str) -> str:
+    """Preserve words while folding input line breaks and spacing."""
+    return re.sub(r"\s+", " ", re.sub(r"@\w+", "", text or "")).strip()
+
+
+def reader_contributes_content(text: str) -> bool:
+    """Require explicit first-person subject and affirmative sharing action."""
+    body = normalize_comment(text)
+    return bool(re.search(
+        r"(?:제가|저도|저는|내가|저희가)[^.!?。！？]{0,80}?"
+        r"(?:공유|첨부)(?:합니다|해요|할게요|했어요|했습니다|드립니다)", body
+    ))
 
 
 def decode_metadata(raw: str | None) -> dict:

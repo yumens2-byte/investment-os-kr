@@ -309,16 +309,21 @@ def test_real_pipeline_live_claim_publish_commit_cursor(services):
 
 
 @pytest.mark.parametrize("mode", ["live", "shadow", "dry_run"])
-def test_role_reversal_replaced_across_real_sdk_modes(services, monkeypatch, mode):
+@pytest.mark.parametrize("comment,draft", [
+    ("이런 지표 정리 덕분에 한눈에 파악할 수 있네요", "지표 정리 감사합니다 😊"),
+    ("지표 정리 덕분에 한눈에 이해돼요", "자료를 정리해주셔서 고마워요"),
+    ("지표 정리\n덕분에 한눈에 파악할 수 있네요", "지표 정리 감사합니다"),
+])
+def test_role_reversal_replaced_across_real_sdk_modes(services, monkeypatch, mode, comment, draft):
     """Exercise collection, model parsing, gate, claim and record via SDK transports."""
     monkeypatch.setenv("REPLY_MODE", mode)
-    services.add_mention("500", text="이런 지표 정리 덕분에 한눈에 파악할 수 있네요")
+    services.add_mention("500", text=comment)
     original = services.generate
 
     def reversed_draft(*, contents, **kwargs):
         result = original(contents=contents, **kwargs)
         if any(line.startswith('{"id":') for line in contents.splitlines()):
-            result.text = json.dumps([{"id": "500", "reply": "지표 정리 감사합니다 😊"}])
+            result.text = json.dumps([{"id": "500", "reply": draft}])
         return result
 
     monkeypatch.setattr(services, "generate", reversed_draft)
@@ -326,7 +331,7 @@ def test_role_reversal_replaced_across_real_sdk_modes(services, monkeypatch, mod
     review = result["review"][0]
     assert review["draft_gate_reason"] == "GATE_ROLE_REVERSAL"
     assert review["source"] == "TEMPLATE_FALLBACK"
-    assert review["reply_text"] != "지표 정리 감사합니다 😊"
+    assert review["reply_text"] != draft
     assert result["actual_published"] == int(mode == "live")
     assert result["simulated"] == int(mode != "live")
     assert services.post_count == int(mode == "live")
@@ -341,6 +346,24 @@ def test_role_reversal_replaced_across_real_sdk_modes(services, monkeypatch, mod
             sent = next(kw["json"]["text"] for method, _, kw in services.x_requests
                         if method == "POST")
             assert sent == row["response_text"]
+
+
+def test_explicit_reader_sharing_is_not_replaced_in_sdk_pipeline(services, monkeypatch):
+    services.add_mention("500", text="자료가 유익해서 저도 정리해 공유합니다")
+    original = services.generate
+
+    def sharing_thanks(*, contents, **kwargs):
+        result = original(contents=contents, **kwargs)
+        if any(line.startswith('{"id":') for line in contents.splitlines()):
+            result.text = json.dumps([{"id": "500", "reply": "자료 공유 감사합니다"}])
+        return result
+
+    monkeypatch.setattr(services, "generate", sharing_thanks)
+    result = run_reply.main()
+    assert result["actual_published"] == 1
+    review = result["review"][0]
+    assert review["draft_gate_reason"] is None and review["source"] == "AI"
+    assert services.tables["kr_reply_history"][0]["response_text"] == "자료 공유 감사합니다"
 
 
 def test_role_reversal_without_safe_fallback_never_claims_or_posts(services, monkeypatch):

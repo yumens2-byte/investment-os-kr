@@ -164,7 +164,9 @@ def check_reply(
     if intent in {"REACTION", "LAUGH"} and re.search(r"의견|분석|설명|정리|통찰", text):
         return False, "GATE_INTENT"
     if praises_our_content(comment_text) and re.search(
-        r"(?:지표|자료|정리|글|설명|분석|콘텐츠|정보)(?:\s*(?:공유|제공))?\s*"
+        r"(?:지표|자료|정리|글|설명|분석|콘텐츠|정보)(?:을|를|에)?\s*"
+        r"(?:(?:정리|공유|제공|분석|설명)\s*)?"
+        r"(?:해\s*주셔서|해\s*주신\s*(?:것|점)|해\s*주심에|해줘서|주셔서)?\s*"
         r"(?:감사|고맙|고마워)", text
     ):
         return False, "GATE_ROLE_REVERSAL"

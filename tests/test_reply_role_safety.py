@@ -16,6 +16,8 @@ def test_content_benefit_is_praise_even_with_neutral_label(label):
 
 @pytest.mark.parametrize("reply", [
     "지표 정리 감사합니다 😊", "자료 공유 고맙습니다", "분석 감사합니다",
+    "지표 정리해 주셔서 감사합니다", "자료를 정리해주셔서 고마워요",
+    "분석해 주신 점 감사합니다", "정보 제공해주셔서 감사합니다",
 ])
 def test_content_credit_cannot_be_reversed(reply):
     assert gate.check_reply(reply, [], COMMENT) == (False, "GATE_ROLE_REVERSAL")
@@ -30,6 +32,40 @@ def test_reader_thanks_remain_allowed(reply):
 
 def test_actual_reader_contribution_is_not_blanket_blocked():
     assert gate.check_reply("자료 공유 감사합니다", [], "제가 정리한 자료 공유합니다")[0]
+
+
+@pytest.mark.parametrize("comment", [
+    "이런 지표 정리\n덕분에 한눈에 파악할 수 있네요",
+    "지표 정리\r\n덕분에 한눈에 파악할 수 있네요",
+    "지표 정리\t덕분에 한눈에 파악할 수 있네요",
+])
+def test_multiline_content_praise_keeps_role_guard(comment):
+    assert policy.intent_for(comment, "SUPPORTIVE_NEUTRAL") == "PRAISE"
+    assert gate.check_reply("지표 정리 감사합니다", [], comment)[1] == "GATE_ROLE_REVERSAL"
+
+
+@pytest.mark.parametrize("comment", [
+    "자료가 유익해서 저도 정리해 공유합니다",
+    "지표 정리 덕분에 이해됐어요. 제가 만든 자료도 공유해요",
+    "제가 정리한 자료를 첨부했습니다",
+])
+def test_explicit_reader_sharing_preserves_credit(comment):
+    assert policy.intent_for(comment, "SUPPORTIVE_NEUTRAL") == "ACK"
+    assert not policy.praises_our_content(comment)
+    assert gate.check_reply("자료 공유 감사합니다", [], comment)[0]
+
+
+@pytest.mark.parametrize("comment", [
+    "자료가 유익해서 저도 정리해 공유하지 않습니다",
+    "지표 정리 덕분에 제가 잘 이해했어요",
+])
+def test_first_person_without_sharing_does_not_disable_guard(comment):
+    assert not policy.reader_contributes_content(comment)
+    assert gate.check_reply("자료 공유 감사합니다", [], comment)[1] == "GATE_ROLE_REVERSAL"
+
+
+def test_negated_benefit_is_not_praise():
+    assert policy.intent_for("자료가 도움이 안 돼요", "SUPPORTIVE_NEUTRAL") == "ACK"
 
 
 def test_bad_ai_draft_is_replaced_before_publication(monkeypatch):
