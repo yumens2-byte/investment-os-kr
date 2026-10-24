@@ -137,6 +137,11 @@ def _format_item(item: dict) -> str:
             "root_author_id": item.get("root_author_id", "(확인 불가)"),
             "scope": "FOREIGN_DIRECT" if item.get("foreign_thread") else "OWN_ROOT",
             "intent": intent_for(item.get("text", ""), item.get("label", "")),
+            **({"recent_response_texts": item["_recent_texts"][-10:]}
+               if "_recent_texts" in item else {}),
+            **({"account_user_id": item["_account_user_id"],
+                "comment_author_id": item.get("author_id", "")}
+               if "_account_user_id" in item else {}),
         },
         ensure_ascii=False,
     )
@@ -228,7 +233,10 @@ def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
         "자료 유익해요 → 도움이 됐다니 다행이에요; 시장 환호 → 관심 가는 흐름이네요.\n"
         "나쁜 예: 시장 환호 → 응원 감사해요; 축하해주셔서 감사합니다 → 축하해주셔서 감사합니다; "
         "시장 환호 → 같이 가보시죠; ㅋㅋ → 정성스러운 의견 감사합니다.\n"
-        f"{prompt_items}\n"
+        + ("recent_response_texts는 최근 발행 문구다. 그 표현을 반복하지 말고 "
+           "CONGRATULATIONS는 축하받은 운영자의 감사 방향을 유지한다.\n"
+           if any("_recent_texts" in i for i in ai_items) else "")
+        + f"{prompt_items}\n"
         'JSON 배열로만 응답: [{"id": "...", "reply": "..."}]'
     )
 

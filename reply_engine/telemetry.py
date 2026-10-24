@@ -8,6 +8,7 @@ v1.1.0 (2026-10-07, FB-1): 플랫폼 공통화.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,57 @@ DEFAULT_JOURNAL_PATH = "logs/reply_events.jsonl"
 logger = logging.getLogger(__name__)
 
 
+def text_hash(text: str) -> str:
+    """Hash exact UTF-8 text, without lossy normalization."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def new_attempt_id() -> str:
+    return uuid4().hex
+
+
+def scope_for(tweet: dict, account_id: str) -> str:
+    root = str(tweet.get("root_author_id") or "")
+    if not root:
+        return "UNVERIFIED"
+    if root == account_id:
+        return "OWN_ROOT"
+    if str(tweet.get("parent_author_id") or "") == account_id:
+        return "FOREIGN_DIRECT"
+    return "FOREIGN_OTHER"
+
+
+def observed_metrics(review: list[dict], mode: str) -> dict:
+    """Count unique IDs in supplied observations, not a complete cohort.
+
+    Eligible means static/scope checks AND classification passed. Cap/gate
+    failures stay in the denominator. Duplicates cannot inflate the rate.
+    """
+    grouped: dict[str, list[dict]] = {}
+    for row in review:
+        tid = str(row.get("reply_tweet_id") or "")
+        if tid:
+            grouped.setdefault(tid, []).append(row)
+    eligible = {
+        tid for tid, rows in grouped.items() if any(r.get("eligible") is True for r in rows)
+    }
+    confirmed = {
+        tid for tid, rows in grouped.items()
+        if mode == "live" and any(r.get("result") in {
+            "PUBLISHED", "PUBLISHED_DB_UNCONFIRMED"
+        } for r in rows)
+    }
+    return {
+        "coverage": "supplied_observations_only",
+        "unique_observed": len(grouped),
+        "unique_eligible": len(eligible),
+        "unique_confirmed_eligible": len(confirmed & eligible),
+        "eligible_publish_rate": (
+            round(len(confirmed & eligible) / len(eligible), 4) if eligible else None
+        ),
+    }
+
+
 def new_run() -> dict:
     return {
         "run_id": os.getenv("GITHUB_RUN_ID") or uuid4().hex,
@@ -32,7 +84,9 @@ def new_run() -> dict:
 
 def event(summary: dict, decision: str, tweet_id: str = "", **details) -> None:
     row = {
-        **{k: summary.get(k) for k in ("run_id", "run_attempt", "commit_sha", "mode")},
+        **{k: summary.get(k) for k in (
+            "run_id", "run_attempt", "commit_sha", "mode", "platform", "account_user_id"
+        )},
         "observed_at": datetime.now(UTC).isoformat(),
         "decision": decision,
         "tweet_id": tweet_id,
@@ -40,7 +94,7 @@ def event(summary: dict, decision: str, tweet_id: str = "", **details) -> None:
     }
     try:
         path = Path(summary.get("journal_path") or DEFAULT_JOURNAL_PATH)
-        path.parent.mkdir(exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as output:
             output.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
     except OSError:
@@ -70,6 +124,26 @@ def write_run_report(summary: dict, guard=None, *, prefix: str = "reply_report")
         "publish_rate_of_pass": round(published / classified_pass, 4) if classified_pass else 0.0,
     }
     review = summary.get("review", [])
+    # No comment bodies in the append-only journal. Retained artifact snapshots
+    # can be deduplicated offline; they do not assert complete cohort coverage.
+    for row in review:
+        event(summary, "DECISION", str(row.get("reply_tweet_id") or ""),
+              origin=row.get("origin"), scope=row.get("scope", "UNVERIFIED"),
+              eligible=row.get("eligible"), result=row.get("result"),
+              source=row.get("source"), draft_gate_reason=row.get("draft_gate_reason"))
+    mode = summary.get("mode", "unknown")
+    summary["observed_metrics"] = observed_metrics(review, mode)
+    summary["scope_metrics"] = {
+        scope: observed_metrics([r for r in review if r.get("scope") == scope], mode)
+        for scope in ("OWN_ROOT", "FOREIGN_DIRECT", "FOREIGN_OTHER", "UNVERIFIED")
+    }
+    attempts = int(summary.get("publish_attempts") or 0)
+    summary["transport_metrics"] = {
+        "requests": attempts,
+        "confirmed": published,
+        "unknown": sum(r.get("result") == "PUBLISH_UNKNOWN" for r in review),
+        "confirmation_rate": round(published / attempts, 4) if attempts else None,
+    }
     summary["cohorts"] = {
         origin: {
             "reviewed": sum(r.get("origin") == origin for r in review),

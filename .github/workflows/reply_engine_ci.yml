@@ -41,7 +41,13 @@ jobs:
       - name: FB reply static checks (FB-1)
         run: ruff check run_fb_reply.py scripts/check_fb_reply_db.py scripts/fb_reply_preflight.py tests/test_fb_reply_common.py tests/test_fb_reply_client.py tests/test_fb_reply_pipeline.py tests/test_fb_reply_preflight.py
       - name: Full unit suite
+        # Evidence/denominator regressions are included by tests/ discovery.
         run: python -m pytest -q tests/ --junitxml=unit-results.xml
+      - name: Evidence and cohort static checks
+        run: >-
+          ruff check reply_engine/reconciliation.py scripts/reply_evidence_review.py
+          scripts/reply_cohort_report.py tests/test_reply_evidence_quality.py
+          tests/test_reply_upgrade_integration.py
       - name: Upload unit results
         if: always()
         uses: actions/upload-artifact@v4

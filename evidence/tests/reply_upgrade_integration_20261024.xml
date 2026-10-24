@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<testsuite name="reply_upgrade_integration" tests="7" failures="0" errors="0" skipped="0" time="0.047">
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_live_sdk_publication_links_claim_event_report_and_rollup" time="0.007" />
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_timeout_sdk_to_evidence_review_and_second_run_never_reposts" time="0.009" />
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_nonlive_sdk_modes_produce_no_publication_evidence[shadow]" time="0.005" />
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_nonlive_sdk_modes_produce_no_publication_evidence[dry_run]" time="0.005" />
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_sdk_db_confirmation_failure_preserves_confirmed_transport" time="0.007" />
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_congratulations_model_to_fallback_through_real_sdks" time="0.007" />
+  <testcase classname="tests.test_reply_upgrade_integration" name="test_interrupted_final_report_still_rolls_up_sdk_events" time="0.007" />
+</testsuite>
