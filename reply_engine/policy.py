@@ -57,6 +57,9 @@ SAFE_POOLS = {
         "한마디 남겨주셔서 고마워요",
     ),
     "PRAISE": ("좋게 봐주셔서 감사해요 😊", "읽어주셔서 고맙습니다", "댓글 남겨주셔서 감사해요"),
+    "CONGRATULATIONS": (
+        "축하해 주셔서 감사합니다 😊", "따뜻한 축하 말씀 고맙습니다", "함께 기뻐해 주셔서 감사해요",
+    ),
     "LAUGH": ("ㅎㅎ 😄", "ㅋㅋ 반가워요", "ㅎㅎ 댓글 잘 봤어요"),
     "MARKET": ("관심 가는 흐름이네요", "변화가 눈에 들어오네요", "같은 부분을 보셨군요 🙂"),
     "ACK": ("ㅎㅎ 반가워요", "댓글 잘 봤어요 🙂", "반응 남겨주셔서 고맙습니다"),
@@ -98,6 +101,10 @@ def intent_for(text: str, label: str) -> str:
         return "REACTION"
     if re.fullmatch(r"[ㅋㅎ!~. ]{2,}", body):
         return "LAUGH"
+    if re.search(r"축하|경하", body) and not re.search(
+        r"(?:축하|경하).*?(?:주셔서|주신|말씀).*?(?:감사|고맙|고마워)", body
+    ):
+        return "CONGRATULATIONS"
     if any(word in body for word in ("감사", "고맙", "고마워")):
         return "THANKS"
     if reader_contributes_content(body):
@@ -161,6 +168,8 @@ def encode_metadata(tweet: dict, *, publish_attempt: bool = False) -> str:
             "parent_text": tweet.get("parent_text", ""),
             "parent_id": tweet.get("parent_id", ""),
             "parent_author_id": tweet.get("parent_author_id", ""),
+            "root_author_id": tweet.get("root_author_id", ""),
+            "foreign_thread": bool(tweet.get("foreign_thread")),
             "in_reply_to_user_id": tweet.get("in_reply_to_user_id", ""),
             "account_user_id": tweet.get("_account_user_id", ""),
             "publish_attempts": int(previous.get("publish_attempts", 0)) + int(publish_attempt),

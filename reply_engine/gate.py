@@ -110,6 +110,8 @@ def check_reply(
     text: str,
     recent_texts: list[str],
     comment_text: str = "",
+    *,
+    context: dict | None = None,
 ) -> tuple[bool, str | None]:
     """
     단건 게이트. recent_texts에는 최근 발행분 + 동일 배치 내 선행 통과분을 함께 전달.
@@ -157,6 +159,18 @@ def check_reply(
     if re.search(r"돈\s*복사|확정\s*수익|떡상|가즈아", text):
         return False, "GATE_MARKET_HYPE"
     intent = intent_for(comment_text, "POSITIVE")
+    # Congratulatory replies must acknowledge congratulations, not give them
+    # back to the reader. Unknown roles use the same conservative direction.
+    if intent == "CONGRATULATIONS" and re.search(r"축하|경하", text):
+        outward = re.search(r"(?:축하|경하)(?:드립니다|드려요|합니다|해요|해드립니다)", text)
+        if outward or not re.search(
+            r"(?:축하|경하).*?(?:주셔서|주신|말씀).*?(?:감사|고맙|고마워)", text
+        ):
+            return False, "GATE_ROLE_REVERSAL"
+    if context and context.get("foreign_thread"):
+        account = str(context.get("_account_user_id") or "")
+        if not account or str(context.get("parent_author_id") or "") != account:
+            return False, "GATE_CONTEXT_UNVERIFIED"
     if intent == "MARKET_HYPE" and re.search(
         r"기대|응원|성투|대박|수익|오르|상승|달려|함께|같이|동의|같은\s*마음", text
     ):

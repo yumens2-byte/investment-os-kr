@@ -267,6 +267,8 @@ def main() -> dict:
             _write_report(summary, guard)
             return summary
 
+    summary["account_user_id"] = my_user_id
+    summary["platform"] = "x"
     if mode == "live":
         summary["expiry_maintenance"] = store.expire_deferred(my_user_id)
         if summary["expiry_maintenance"].get("errors"):
@@ -405,6 +407,7 @@ def main() -> dict:
                 "parent_text": meta.get("parent_text", ""),
                 "parent_id": meta.get("parent_id", ""),
                 "parent_author_id": meta.get("parent_author_id", ""),
+                "root_author_id": meta.get("root_author_id", ""),
                 "_metadata": meta,
                 "_retry": True,
                 "_run_id": summary["run_id"],
@@ -435,6 +438,8 @@ def main() -> dict:
                 "reply_text": None,
                 "result": reason,
                 "foreign_thread": bool(tweet.get("foreign_thread")),
+                "scope": telemetry.scope_for(tweet, my_user_id),
+                "eligible": bool(tweet.get("_eligible")),
             }
         )
         # Published/unknown rows must never be overwritten merely to log a duplicate.
@@ -565,6 +570,12 @@ def main() -> dict:
         for tweet in candidates:
             label = labels.get(tweet["id"], "AMBIGUOUS")
             if label in classifier.PASS_LABELS:
+                tweet["_eligible"] = True
+                telemetry.event(
+                    summary, "ELIGIBLE", tweet["id"], eligible=True,
+                    scope=telemetry.scope_for(tweet, my_user_id),
+                    origin="recovered" if tweet.get("_retry") else "new",
+                )
                 pass_items.append({**tweet, "label": label})
             else:
                 reason = f"CLASS_{label}"
@@ -606,7 +617,10 @@ def main() -> dict:
         window = [t for t in pass_items[index:index + capacity] if t["id"] not in generated_ids]
         if not window:
             return
-        batch = generator.generate_batch(window)
+        batch = generator.generate_batch([
+            {**item, "_recent_texts": recent_texts[-10:], "_account_user_id": my_user_id}
+            for item in window
+        ])
         replies.update(batch)
         reply_sources.update(getattr(batch, "sources", {}))
         generated_ids.update(t["id"] for t in window)
@@ -673,7 +687,8 @@ def main() -> dict:
                     tweet_id, "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
                 )
             gate_ok, gate_reason = gate.check_reply(
-                reply_text, recent_texts, comment_text=tweet["text"]
+                reply_text, recent_texts, comment_text=tweet["text"],
+                context={**tweet, "_account_user_id": my_user_id},
             )
             draft_gate_reason = gate_reason
             # 배치 내 동일 문구 연쇄 생성으로 유사도 탈락 시, 결정적 순서의 안전 풀을
@@ -681,7 +696,8 @@ def main() -> dict:
             if not gate_ok:
                 for fallback_text in generator.contextual_fallbacks(tweet):
                     fb_ok, _fb_reason = gate.check_reply(
-                        fallback_text, recent_texts, comment_text=tweet["text"]
+                        fallback_text, recent_texts, comment_text=tweet["text"],
+                        context={**tweet, "_account_user_id": my_user_id},
                     )
                     if not fb_ok:
                         continue
@@ -730,6 +746,8 @@ def main() -> dict:
             "source": response_source,
             "draft_gate_reason": draft_gate_reason,
             "foreign_thread": bool(tweet.get("foreign_thread")),
+            "scope": telemetry.scope_for(tweet, my_user_id),
+            "eligible": True,
             "result": None,
         }
         summary["review"].append(review_entry)
@@ -763,7 +781,16 @@ def main() -> dict:
             published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
             continue
 
-        metadata = encode_metadata({**tweet, "_account_user_id": my_user_id}, publish_attempt=True)
+        attempt_meta = decode_metadata(encode_metadata(
+            {**tweet, "_account_user_id": my_user_id}, publish_attempt=True
+        ))
+        attempt_meta.update({
+            "attempt_id": telemetry.new_attempt_id(),
+            "claimed_at": datetime.now(UTC).isoformat(),
+            "response_text_sha256": telemetry.text_hash(reply_text),
+            "target_tweet_id": tweet_id,
+        })
+        metadata = json.dumps(attempt_meta, ensure_ascii=False)
         claimed_metadata = store.claim_publication(tweet_id, metadata)
         if not claimed_metadata:
             filter_mod.release_admission(tweet, cap_ctx)
@@ -798,8 +825,16 @@ def main() -> dict:
             _skip(tweet_id, "EXPIRED_BEFORE_SEND")
             continue
 
+        request_evidence = decode_metadata(metadata)
+        review_entry["attempt_id"] = request_evidence.get("attempt_id")
+        review_entry["requested_at"] = datetime.now(UTC).isoformat()
+        review_entry["response_text_sha256"] = telemetry.text_hash(reply_text)
         telemetry.event(summary, "PUBLISH_REQUEST", tweet_id, origin=review_entry["origin"],
-                        source=response_source)
+                        source=response_source, attempt_id=review_entry["attempt_id"],
+                        account_user_id=my_user_id,
+                        response_text_sha256=review_entry["response_text_sha256"],
+                        scope=review_entry["scope"], eligible=True,
+                        requested_at=review_entry["requested_at"])
         # live: 결과 불명도 quota를 점유한다. 명시적 거절일 때만 반환한다.
         quota_used_this_run += 1
         foreign_reserved_this_run += int(bool(tweet.get("foreign_thread")))
@@ -819,6 +854,7 @@ def main() -> dict:
         store.upsert_budget(guard.row)  # V-1: 발행마다 즉시 저장 (timeout 킬 시 집계 유실 방지)
 
         if response_tweet_id:
+            review_entry["response_tweet_id"] = str(response_tweet_id)
             persisted = store.mark_responded(tweet_id, response_tweet_id)
             review_entry["result"] = "PUBLISHED"
             if not persisted:
@@ -830,6 +866,8 @@ def main() -> dict:
                 )
             telemetry.event(summary, review_entry["result"], tweet_id,
                             response_id=response_tweet_id, origin=review_entry["origin"],
+                            attempt_id=review_entry["attempt_id"],
+                            scope=review_entry["scope"], eligible=True,
                             source=response_source)
             recent_texts.append(reply_text)
             published_this_run += 1
@@ -844,11 +882,15 @@ def main() -> dict:
             if failure == "PUBLISH_RETRYABLE" and int(error_meta.get("publish_attempts", 0)) >= 3:
                 failure = "PUBLISH_EXHAUSTED"
             error_meta["platform_error"] = str(publish_error or "")[:1000]
+            error_meta["requested_at"] = review_entry["requested_at"]
             if not store.update_skip_reason(
                 tweet_id, failure, json.dumps(error_meta, ensure_ascii=False)
             ):
                 cursor_safe_to_advance = False
             review_entry["result"] = failure
+            telemetry.event(summary, "PUBLISH_RESULT", tweet_id, result=failure,
+                            attempt_id=review_entry["attempt_id"], eligible=True,
+                            scope=review_entry["scope"])
             _skip(tweet_id, failure)
             summary["deferred"] += int(failure in DEFER_REASONS)
             # Confirmed non-publication returns the in-run reservation.
