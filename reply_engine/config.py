@@ -31,13 +31,14 @@ v1.5.0 (2026-09-10): 회당 발행 상한을 추가하고 운영 상한을 유�
 v2.1.0 (2026-10-07, FB-1): is_enabled(var=) / get_mode(var=) 키워드 인자 추가.
   기본값은 REPLY_ENABLED / REPLY_MODE 그대로이며, Facebook은 FACE_REPLY_* 변수로
   같은 엄격 판독 규칙(정확히 'true', 인식 불가 모드는 dry_run 강등)을 재사용한다.
+v2.2.0 (2026-10-28): REPLY_MAX_LENGTH_LONG / REPLY_LONG_COMMENT_CHARS 신설 (긴 의견 답글 상한).
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -93,6 +94,9 @@ REPLY_MAX_AGE_HOURS: int = env_int_clamped("REPLY_MAX_AGE_HOURS", 24, 1, 168)
 
 # 답글 텍스트 규격
 REPLY_MAX_LENGTH: int = 40  # 공백 포함 최대 길이 ("한 줄 미만" 정책)
+# 2026-10-28: 긴 의견에 12자 상투 답글이 붙던 문제 — 긴 댓글에만 상한을 넓힌다.
+REPLY_MAX_LENGTH_LONG: int = 60
+REPLY_LONG_COMMENT_CHARS: int = 40  # 멘션·공백 정규화 후 본문 길이 기준
 REPLY_SIMILARITY_THRESHOLD: float = 0.6  # 최근 발행분 대비 자카드 유사도 상한
 REPLY_RECENT_COMPARE_COUNT: int = 30  # 유사도 비교 대상 최근 발행 건수
 

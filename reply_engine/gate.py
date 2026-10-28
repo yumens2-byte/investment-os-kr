@@ -13,6 +13,10 @@ reply_engine/gate.py
   GATE_ECHO         — 원 댓글 미러링 (역할 반전 방지, P-2 — 2026-08-18 축하 사고)
   GATE_FORMAT       — 해시태그/링크/멘션 포함
   GATE_SIMILARITY   — 최근 발행분 또는 동일 배치 내 유사 (자카드, L6 — X 403 방지)
+  GATE_TONE         — 걱정·불안 댓글에 웃음·들뜬 표현 (2026-10-28 "공포 지림요 ㅠ → ㅎㅎ 반가워요")
+
+v2.2.0 (2026-10-28): 길이 상한은 댓글 길이 기준 2단계(reply_max_length).
+  CHOICE 의도에서 선택 지지 표현 차단. choose_reply로 AI 후보 → 안전 풀 순서 선택.
 """
 
 from __future__ import annotations
@@ -23,12 +27,11 @@ import unicodedata
 
 from reply_engine.config import (
     BANNED_WORDS,
-    REPLY_MAX_LENGTH,
     REPLY_SIMILARITY_THRESHOLD,
 )
-from reply_engine.policy import intent_for, praises_our_content
+from reply_engine.policy import intent_for, praises_our_content, reply_max_length
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +126,7 @@ def check_reply(
 
     text = text.strip()
 
-    if len(text) > REPLY_MAX_LENGTH:
+    if len(text) > reply_max_length(comment_text):
         return False, "GATE_LENGTH"
 
     emoji_count = len(_EMOJI_PATTERN.findall(text))
@@ -158,7 +161,7 @@ def check_reply(
     # may be amplified merely because the generated wording differs from input.
     if re.search(r"돈\s*복사|확정\s*수익|떡상|가즈아", text):
         return False, "GATE_MARKET_HYPE"
-    intent = intent_for(comment_text, "POSITIVE")
+    intent = intent_for(comment_text, "POSITIVE", (context or {}).get("parent_text", ""))
     # Congratulatory replies must acknowledge congratulations, not give them
     # back to the reader. Unknown roles use the same conservative direction.
     if intent == "CONGRATULATIONS" and re.search(r"축하|경하", text):
@@ -167,6 +170,9 @@ def check_reply(
             r"(?:축하|경하).*?(?:주셔서|주신|말씀).*?(?:감사|고맙|고마워)", text
         ):
             return False, "GATE_ROLE_REVERSAL"
+    # 실측(10-12): "100화 축하드립니다" → "ㅎㅎ 반가워요". 축하를 받았으면 감사로 응답한다.
+    if intent == "CONGRATULATIONS" and not re.search(r"축하|감사|고맙|고마워", text):
+        return False, "GATE_INTENT"
     if context and context.get("foreign_thread"):
         account = str(context.get("_account_user_id") or "")
         if not account or str(context.get("parent_author_id") or "") != account:
@@ -176,6 +182,15 @@ def check_reply(
     ):
         return False, "GATE_MARKET_HYPE"
     if intent in {"REACTION", "LAUGH"} and re.search(r"의견|분석|설명|정리|통찰", text):
+        return False, "GATE_INTENT"
+    if intent == "WORRY" and re.search(
+        r"[ㅋㅎ]{2,}|반가|반갑|기대|화이팅|파이팅|축하|신나|재미|즐거|[😄😆😁🤣😂🚀🔥🎉]", text
+    ):
+        return False, "GATE_TONE"
+    if intent == "CHOICE" and re.search(
+        r"좋은\s*선택|현명|정답|탁월|맞는\s*선택|잘\s*고르|동의|저도\s*[ABab]|[ABab]\s*(?:가|이)\s*(?:낫|좋|맞)",
+        text,
+    ):
         return False, "GATE_INTENT"
     if praises_our_content(comment_text) and re.search(
         r"(?:지표|자료|정리|글|설명|분석|콘텐츠|정보)(?:을|를|에)?\s*"
@@ -206,3 +221,32 @@ def check_reply(
             return False, "GATE_SIMILARITY"
 
     return True, None
+
+
+def choose_reply(
+    drafts: list[str] | tuple[str, ...],
+    fallbacks: tuple[str, ...],
+    recent_texts: list[str],
+    comment_text: str = "",
+    *,
+    context: dict | None = None,
+) -> tuple[str | None, str, str | None]:
+    """AI 후보를 순서대로 검사하고, 전부 탈락하면 의도별 안전 풀을 검사한다.
+
+    반환: (선택 문구 | None, source, 첫 후보의 탈락 사유 | None)
+      source — AI(첫 후보) / AI_ALT(2번째 이후 후보) / TEMPLATE_FALLBACK / NONE
+    전부 탈락하면 (None, "NONE", 첫 탈락 사유)로 무응답 처리하게 한다.
+    """
+    first_reason: str | None = None
+    for index, draft in enumerate(d for d in drafts if isinstance(d, str)):
+        ok, reason = check_reply(draft, recent_texts, comment_text, context=context)
+        if ok:
+            return draft.strip(), ("AI" if index == 0 else "AI_ALT"), first_reason
+        if first_reason is None:
+            first_reason = reason
+    if first_reason is None:
+        first_reason = "GATE_EMPTY"
+    for fallback in fallbacks:
+        if check_reply(fallback, recent_texts, comment_text, context=context)[0]:
+            return fallback, "TEMPLATE_FALLBACK", first_reason
+    return None, "NONE", first_reason

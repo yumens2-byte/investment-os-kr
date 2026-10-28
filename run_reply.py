@@ -86,9 +86,10 @@ from reply_engine.policy import (
     classify_publish_error,
     decode_metadata,
     encode_metadata,
+    intent_for,
 )
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -171,6 +172,7 @@ def main() -> dict:
         "history_metrics": None,  # 최근 DB 이력 기반 실제 응답 전환율
         "recovered_failures": 0,
         "deferred": 0,
+        "source_counts": {},  # 생성 경로별 건수 (AI / AI_ALT / TEMPLATE_* / DB_RETRY)
         "model_usage": [],  # 커서 뒤 DB에서 복구한 live 발행 실패
         "started_at": datetime.now(UTC).isoformat(),
     }
@@ -609,6 +611,7 @@ def main() -> dict:
     # ── Step 5: 생성 ──────────────────────────────────────────
     replies: dict[str, str] = {}
     reply_sources: dict[str, str] = {}
+    reply_candidates: dict[str, list[str]] = {}
     generated_ids: set[str] = set()
     summary["non_kr_replies"] = sum(lang.is_non_korean(t["text"]) for t in pass_items)
 
@@ -623,6 +626,7 @@ def main() -> dict:
         ])
         replies.update(batch)
         reply_sources.update(getattr(batch, "sources", {}))
+        reply_candidates.update(getattr(batch, "candidates", {}))
         generated_ids.update(t["id"] for t in window)
         for _ in range(getattr(batch, "api_calls", 0)):
             guard.record_gemini()
@@ -630,6 +634,7 @@ def main() -> dict:
         for item in window:
             if item.get("_retry") and item.get("_stored_response_text"):
                 replies[item["id"]] = item["_stored_response_text"]
+                reply_candidates.pop(item["id"], None)
 
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
     recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
@@ -659,6 +664,7 @@ def main() -> dict:
 
         # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
         draft_gate_reason = None
+        gated = False  # 생성·게이트 단계를 실제로 거쳤는지 (근거 기록 대상)
         reserved = False
         skip_reason: str | None = None
         if max(published_this_run, publish_attempts_this_run) >= run_cap:
@@ -686,31 +692,24 @@ def main() -> dict:
                 response_source = reply_sources.get(
                     tweet_id, "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
                 )
-            gate_ok, gate_reason = gate.check_reply(
-                reply_text, recent_texts, comment_text=tweet["text"],
+            # AI 후보 → 의도별 안전 풀 순서로 게이트 전체를 검사한다 (2026-10-28).
+            # 전부 탈락할 때만 무응답 처리하며, 탈락 시 첫 초안을 이력에 남긴다.
+            gated = True
+            drafts = reply_candidates.get(tweet_id) or [reply_text]
+            chosen, chosen_source, draft_gate_reason = gate.choose_reply(
+                drafts, generator.contextual_fallbacks(tweet), recent_texts,
+                comment_text=tweet["text"],
                 context={**tweet, "_account_user_id": my_user_id},
             )
-            draft_gate_reason = gate_reason
-            # 배치 내 동일 문구 연쇄 생성으로 유사도 탈락 시, 결정적 순서의 안전 풀을
-            # 순회하며 게이트 전체를 재검사한다. 전부 탈락할 때만 무응답 처리한다.
-            if not gate_ok:
-                for fallback_text in generator.contextual_fallbacks(tweet):
-                    fb_ok, _fb_reason = gate.check_reply(
-                        fallback_text, recent_texts, comment_text=tweet["text"],
-                        context={**tweet, "_account_user_id": my_user_id},
-                    )
-                    if not fb_ok:
-                        continue
-                    logger.info(
-                        f"[Gate] 초안 {draft_gate_reason} → 안전 fallback 대체: "
-                        f"'{reply_text}' → '{fallback_text}'"
-                    )
-                    reply_text = fallback_text
-                    response_source = "TEMPLATE_FALLBACK"
-                    gate_ok, gate_reason = True, None
-                    break
-            if not gate_ok:
-                skip_reason = gate_reason
+            if chosen is not None and chosen_source != "AI":
+                logger.info(
+                    f"[Gate] 초안 {draft_gate_reason} → {chosen_source} 대체: "
+                    f"'{reply_text}' → '{chosen}'"
+                )
+                reply_text = chosen
+                response_source = chosen_source
+            if chosen is None:
+                skip_reason = draft_gate_reason
             elif mode == "live" and not guard.can_write():
                 skip_reason = "BUDGET_WRITE"
             else:
@@ -718,6 +717,18 @@ def main() -> dict:
                 reserved = admitted
                 if not admitted:
                     skip_reason = reason
+
+        # 생성 근거 (2026-10-28): 고정 문구 대체율·게이트 탈락 사유를 DB로 측정한다.
+        evidence_tweet = {**tweet, "_account_user_id": my_user_id}
+        if gated:
+            evidence_tweet.update(
+                _response_source=response_source,
+                _draft_gate_reason=draft_gate_reason,
+                _intent=intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", "")),
+            )
+            summary["source_counts"][response_source] = (
+                summary["source_counts"].get(response_source, 0) + 1
+            )
 
         # 이력 기록 (L1) — dry_run은 DB 쓰기 금지
         record = {
@@ -733,7 +744,7 @@ def main() -> dict:
             "response_tweet_id": None,
             "dry_run": mode != "live",
             "mode": mode,
-            "error_message": encode_metadata({**tweet, "_account_user_id": my_user_id}),
+            "error_message": encode_metadata(evidence_tweet),
         }
 
         review_entry = {
@@ -781,9 +792,7 @@ def main() -> dict:
             published_conv_run[conversation_id] = published_conv_run.get(conversation_id, 0) + 1
             continue
 
-        attempt_meta = decode_metadata(encode_metadata(
-            {**tweet, "_account_user_id": my_user_id}, publish_attempt=True
-        ))
+        attempt_meta = decode_metadata(encode_metadata(evidence_tweet, publish_attempt=True))
         attempt_meta.update({
             "attempt_id": telemetry.new_attempt_id(),
             "claimed_at": datetime.now(UTC).isoformat(),
@@ -841,6 +850,8 @@ def main() -> dict:
         # live: 발행 → 즉시 기록 (발행-기록 짝)
         # 테스트/외부 사용처가 레거시 post_reply를 교체할 수 있어 해당 경우에는
         # 기존 호출 규약을 유지하고, 실제 클라이언트 경로에서는 오류 원문도 받는다.
+        # 딜레이·지터 동안 유휴였던 연결은 끊겨 있을 수 있다 (2026-10-26/27 실측 정지).
+        x_client.reset_connection(client)
         if x_client.post_reply is _DEFAULT_POST_REPLY:
             publish_result = x_client.post_reply_with_error(client, reply_text, tweet_id)
         else:

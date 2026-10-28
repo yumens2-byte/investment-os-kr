@@ -23,6 +23,11 @@ v1.3.0 (2026-08-30, R-3): fetch_mentions 반환에 saturated / oldest_id 추가.
   수집 상한 포화(= 미수집 멘션 존재 가능)가 기존에는 로그·리포트 어디에도
   흔적을 남기지 않아, 커서 전진으로 인한 영구 유실을 사후 판정할 수 없었다.
   기존 반환 키는 전부 보존하므로 호출부 호환 유지.
+
+v2.1.0 (2026-10-28): 발행 연결 안정화.
+  실측(run 40279047027 / 40460452506): 첫 발행 딜레이 10분+ 뒤 POST가 약 16분 정지 후
+  RemoteDisconnected → PUBLISH_UNKNOWN. tweepy는 timeout 없는 Session 1개를 재사용한다.
+  기본 timeout 세션을 쓰고, 발행 직전 유휴 연결을 버리고 새 연결로 요청한다.
 """
 
 from __future__ import annotations
@@ -31,14 +36,38 @@ import logging
 import os
 from typing import Any
 
+import requests
 import tweepy
 
 from reply_engine.config import MENTIONS_MAX_PAGES, MENTIONS_MAX_RESULTS
 from reply_engine.policy import BatchResult
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 logger = logging.getLogger(__name__)
+
+# (connect, read) 초. read 초과도 결과 불명(PUBLISH_UNKNOWN)으로 처리되며 재시도하지 않는다.
+REQUEST_TIMEOUT: tuple[int, int] = (10, 60)
+
+
+class TimeoutSession(requests.Session):
+    """timeout 미지정 요청에 기본값을 적용한다 (tweepy는 timeout을 넘기지 않는다)."""
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+        return super().request(method, url, **kwargs)
+
+
+def reset_connection(client: Any) -> None:
+    """유휴 keep-alive 연결을 버리고 새 세션으로 교체한다. session 없는 대역은 무시."""
+    old = getattr(client, "session", None)
+    if old is None:
+        return
+    try:
+        old.close()
+    except Exception as exc:  # 닫기 실패는 새 세션 사용에 영향이 없다
+        logger.warning(f"[XClient] 기존 세션 종료 실패 (무시): {exc}")
+    client.session = TimeoutSession()
 
 
 def get_x_client() -> tweepy.Client | None:
@@ -52,12 +81,14 @@ def get_x_client() -> tweepy.Client | None:
         logger.error("[XClient] API 자격증명 환경변수 미설정")
         return None
 
-    return tweepy.Client(
+    client = tweepy.Client(
         consumer_key=api_key,
         consumer_secret=api_secret,
         access_token=access_token,
         access_token_secret=access_secret,
     )
+    client.session = TimeoutSession()
+    return client
 
 
 def fetch_my_user_id(client: tweepy.Client) -> str | None:
