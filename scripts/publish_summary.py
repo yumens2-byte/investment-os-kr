@@ -7,7 +7,7 @@
       3) docs/reply_summary/YYYY-MM/run_<run_id>.md 생성 (집계만 — 댓글 원문·개인정보 미포함)
       4) git add/commit/push (변경 없으면 스킵)
 안전: 커밋 대상은 요약 MD 뿐 — 로그 원문·댓글 텍스트는 절대 커밋하지 않는다(격리 원칙).
-실패 정책: artifact 부재·파싱 실패 시 요약 파일에 이유를 남기고 정상 종료(워크플로 실패로 만들지 않음).
+실패 정책: artifact 부재·파싱 실패 시 이유를 남기고 정상 종료한다.
 """
 from __future__ import annotations
 
@@ -61,21 +61,40 @@ def parse_summary(zbytes: bytes) -> dict:
 def build_markdown(run_id: str, conclusion: str, event: str,
                    created: str, s: dict, note: str = "") -> str:
     finished = s.get("finished_at", "")
+    mode = s.get("mode", "unknown")
+    # bool, null, strings and negative counts are not publication evidence.
+    def count(value):
+        return value if type(value) is int and value >= 0 else "미확인"
+
+    actual = count(s.get("actual_published", s.get("published"))) if mode == "live" else (
+        0 if mode in {"shadow", "dry_run"} else "미확인"
+    )
+    simulated = count(s.get("simulated", s.get("published"))) if mode in {
+        "shadow", "dry_run"
+    } else (0 if mode == "live" else "미확인")
+    raw_reasons = s.get("skip_reasons")
+    reasons = raw_reasons if isinstance(raw_reasons, dict) else {}
+    unknown = count(reasons.get("PUBLISH_UNKNOWN", 0)) if isinstance(
+        raw_reasons, dict
+    ) else "미확인"
     lines = [
         f"# run {run_id} — 요약",
         "",
         f"- 실행: {created or '?'} / 종료: {finished or '?'}",
         f"- 결론: {conclusion} · 트리거: {event} · exit_reason: {s.get('exit_reason', '-')}",
-        f"- **발행 수: {s.get('published', 0)}** (초안 {s.get('candidates', 0)} / 분류 통과 {s.get('classified_pass', 0)})",
-        f"- 수집 포화: {s.get('collection_saturated', False)} · oldest_id: {s.get('oldest_id', '-')}",
+        f"- 모드: {mode} · 실행 코드: {s.get('commit_sha', '미확인')}",
+        f"- **실제 발행: {actual} / 모의: {simulated} / 발행 결과 불명: {unknown}**",
+        f"- 초안: {s.get('candidates', 0)} / 분류 통과: {s.get('classified_pass', 0)}",
+        f"- 수집 포화: {s.get('collection_saturated', False)} "
+        f"· oldest_id: {s.get('oldest_id', '-')}",
         "",
         "## skip 사유 분포",
         "",
     ]
-    reasons = s.get("skip_reasons") or {}
-    for k, v in sorted(reasons.items(), key=lambda kv: -int(kv[1]))[:MAX_SKIP_ROWS]:
+    valid_reasons = {k: v for k, v in reasons.items() if type(v) is int and v >= 0}
+    for k, v in sorted(valid_reasons.items(), key=lambda kv: -kv[1])[:MAX_SKIP_ROWS]:
         lines.append(f"- {k}: {v}")
-    if not reasons:
+    if not valid_reasons:
         lines.append("- (기록 없음)")
     funnel = s.get("funnel") or {}
     if funnel:

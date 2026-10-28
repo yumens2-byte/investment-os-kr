@@ -756,6 +756,8 @@ def main() -> dict:
             "reply_text": reply_text,
             "source": response_source,
             "draft_gate_reason": draft_gate_reason,
+            "quality_evaluated": gated,
+            "intent": intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", "")),
             "foreign_thread": bool(tweet.get("foreign_thread")),
             "scope": telemetry.scope_for(tweet, my_user_id),
             "eligible": True,

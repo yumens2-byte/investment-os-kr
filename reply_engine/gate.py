@@ -189,9 +189,19 @@ def check_reply(
         return False, "GATE_TONE"
     # 덕담·기원("맛있게 드세요")을 상대가 이미 겪은 일로 바꾸는 오독 차단 (10-28 live 실측).
     if intent == "GREETING" and re.search(
-        r"(?:되|드|하|보내|먹|드시|지내)셨다니|(?:드|되|보내|지내)셨(?:군요|네요)", text
+        r"(?:되|드|하|보내|먹|드시|지내)셨다니|(?:드|되|보내|지내)셨(?:군요|네요)"
+        r"|(?:먹었|쉬었|보냈|즐겼|잘\s*잤|드셨|쉬셨|보내셨|즐기셨|주무셨)"
+        r"(?:다니|군요|네요|어요|겠습니다)", text
     ):
         return False, "GATE_ROLE_REVERSAL"
+    # A lexically safe acknowledgement can still discard the explicit social intent.
+    # Exact generic phrases only: avoid guessing semantic relevance from token overlap.
+    generic = re.sub(r"[^가-힣A-Za-z0-9]", "", text)
+    if intent in {"GREETING", "WORRY", "OPINION", "CHOICE"} and generic in {
+        "댓글잘봤어요", "댓글잘보았습니다", "반응남겨주셔서고맙습니다",
+        "댓글남겨주셔서감사해요", "반가워요", "반갑습니다",
+    }:
+        return False, "GATE_INTENT"
     if intent == "CHOICE" and re.search(
         r"좋은\s*선택|현명|정답|탁월|맞는\s*선택|잘\s*고르|동의|저도\s*[ABab]|[ABab]\s*(?:가|이)\s*(?:낫|좋|맞)",
         text,
