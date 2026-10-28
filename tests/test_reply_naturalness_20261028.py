@@ -124,6 +124,28 @@ def test_choice_gate_blocks_endorsement(reply):
     assert not ok and reason == "GATE_INTENT"
 
 
+@pytest.mark.parametrize("comment", [
+    "@tiger18272 류님 저녁 맛있게 드세용 😄😄",
+    "@tiger18272 점심 맛있게 드세요",
+    "@tiger18272 맛저하세요~",
+    "@tiger18272 오늘은 푹 쉬세요",
+])
+def test_meal_and_rest_wishes_are_greetings(comment):
+    assert policy.intent_for(comment, "POSITIVE") == "GREETING"
+
+
+def test_live_incident_wish_misread_is_replaced():
+    """10-28 live 실측: '저녁 맛있게 드세용' → '맛있는 저녁 되셨다니 다행이에요!' 발행."""
+    item = {"id": "2115373192760140047", "text": "@tiger18272 류님 저녁 맛있게 드세용 😄😄",
+            "label": "POSITIVE"}
+    bad = "맛있는 저녁 되셨다니 다행이에요! 😊"
+    assert gate.check_reply(bad, [], item["text"]) == (False, "GATE_ROLE_REVERSAL")
+    text, source, reason = gate.choose_reply(
+        [bad], generator.contextual_fallbacks(item), [], item["text"])
+    assert reason == "GATE_ROLE_REVERSAL" and source == "TEMPLATE_FALLBACK"
+    assert text in policy.SAFE_POOLS["GREETING"]
+
+
 def test_congratulations_requires_acknowledgement():
     comment = "@tiger18272 에피소드 100화 축하드립니다 화이팅입니다!!"
     assert gate.check_reply("ㅎㅎ 반가워요", [], comment) == (False, "GATE_INTENT")

@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # 2026-10-28 자연스러운 호응 고도화: 생성 프롬프트(후보 3개·의도별 방향·max_len)와
 # 분류 프롬프트(QUESTION 범위 한정)를 의도적으로 변경한 기준.
 # docs/reply_upgrade_naturalness_20261028.md 3절·7절.
-X_GENERATOR_PROMPT_SHA256 = "63ffba4dd1e130e385a2766e2f1941eb7890d60bb9c18b7c707f44a4cc0b9c0f"
+X_GENERATOR_PROMPT_SHA256 = "e5bcc7a91cf8131ed56cec8108f79786e054f937226a2deef0854bac962c49e5"
 X_CLASSIFIER_PROMPT_SHA256 = "55044bfeeba9177eeee57d2371c6ff9a8e787672a4481db9bc79842c89ead3c0"
 
 _GEN_ITEMS = [

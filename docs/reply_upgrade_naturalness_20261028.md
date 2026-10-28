@@ -141,3 +141,18 @@ from kr_reply_history
 where mode = 'live' and responded and created_at >= '2026-10-28'
 group by 1 order by 2 desc;
 ```
+
+## 11. live 검증 후 보완 (2026-10-28 12:04 UTC 실행)
+
+run 40684150702(`30da9b0`, live): 발행 1건 성공, PUBLISH_UNKNOWN 없음, main 키 404 후 동일 실행 내 생략 확인.
+첫 발행 딜레이 164초로 10분+ 유휴 조건은 재현되지 않아 P0-1은 미검증으로 유지한다.
+
+발행 문구 오류: "류님 저녁 맛있게 드세용 😄😄" → "맛있는 저녁 되셨다니 다행이에요! 😊".
+상대의 덕담을 상대가 겪은 일로 바꿨다. 원인: 식사 덕담이 GREETING으로 판정되지 않아 ACK로 처리되고,
+덕담 오독을 막는 게이트가 없었다.
+
+보완:
+- `policy._GREETING_PATTERN`: 식사·휴식 덕담("맛있게 드세요/드세용", "맛저", "푹 쉬세요" 등) 추가.
+- `gate.check_reply`: GREETING 댓글에 "~되셨다니/드셨다니/보내셨군요" 등 → `GATE_ROLE_REVERSAL`.
+- 생성 프롬프트: 덕담은 상대가 건넨 기원이며 상대가 겪은 일로 바꾸지 않는다.
+- 회귀 테스트: 실측 사례가 차단되고 GREETING 풀로 대체됨을 고정.

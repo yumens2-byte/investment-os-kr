@@ -187,6 +187,11 @@ def check_reply(
         r"[ㅋㅎ]{2,}|반가|반갑|기대|화이팅|파이팅|축하|신나|재미|즐거|[😄😆😁🤣😂🚀🔥🎉]", text
     ):
         return False, "GATE_TONE"
+    # 덕담·기원("맛있게 드세요")을 상대가 이미 겪은 일로 바꾸는 오독 차단 (10-28 live 실측).
+    if intent == "GREETING" and re.search(
+        r"(?:되|드|하|보내|먹|드시|지내)셨다니|(?:드|되|보내|지내)셨(?:군요|네요)", text
+    ):
+        return False, "GATE_ROLE_REVERSAL"
     if intent == "CHOICE" and re.search(
         r"좋은\s*선택|현명|정답|탁월|맞는\s*선택|잘\s*고르|동의|저도\s*[ABab]|[ABab]\s*(?:가|이)\s*(?:낫|좋|맞)",
         text,
