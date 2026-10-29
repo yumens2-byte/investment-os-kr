@@ -54,6 +54,10 @@ BACKOFF_BASE: int = 2
 DEFAULT_MAX_TOKENS: int = 1024
 MAX_API_CALLS: int = 12
 
+# 2026-10-28: 프로젝트 권한상 모델을 찾지 못하는(404) 키는 같은 프로세스 안에서
+# 다시 호출해도 결과가 같다. 실측: main 키 flash-lite가 매 호출 404 → 실행당 콜 낭비.
+_UNAVAILABLE_MODELS: set[tuple[str, str]] = set()
+
 
 def _error_status(exc: Exception) -> int | None:
     for value in (getattr(exc, "code", None), getattr(exc, "status_code", None)):
@@ -168,6 +172,8 @@ def call(
     for key_label, api_key, is_paid in keys:
         if api_calls >= call_limit:
             break
+        if (key_label, model_name) in _UNAVAILABLE_MODELS:
+            continue
         # 유료 키 진입 시 경고 로그 (실제 과금)
         if is_paid:
             logger.warning(f"[GeminiGW] ⚠️ 무료 키 전부 실패 → 유료 키({key_label}) 사용")
@@ -253,6 +259,12 @@ def call(
                 )
                 # Bad payloads do not improve on another key. Auth/model availability
                 # can differ by project; 401/403/404 move directly to the next key.
+                if status == 404:
+                    _UNAVAILABLE_MODELS.add((key_label, model_name))
+                    logger.warning(
+                        "[GeminiGW] key=%s model=%s 404 — 이 실행에서 해당 키 생략 "
+                        "(키 프로젝트의 모델 권한 확인 필요)", key_label, model_name,
+                    )
                 if status in {400, 422}:
                     result = _fail_result(last_error, fallback_value)
                     result.update(api_calls=api_calls, attempts=attempts)

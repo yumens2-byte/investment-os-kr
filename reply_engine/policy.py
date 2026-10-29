@@ -7,7 +7,13 @@ import os
 import re
 from datetime import UTC, datetime, timedelta
 
-POLICY_VERSION = "2.1.0"
+from reply_engine.config import (
+    REPLY_LONG_COMMENT_CHARS,
+    REPLY_MAX_LENGTH,
+    REPLY_MAX_LENGTH_LONG,
+)
+
+POLICY_VERSION = "2.2.0"
 DEFER_REASONS = frozenset(
     {
         "RECEIVED",
@@ -63,7 +69,87 @@ SAFE_POOLS = {
     "LAUGH": ("ㅎㅎ 😄", "ㅋㅋ 반가워요", "ㅎㅎ 댓글 잘 봤어요"),
     "MARKET": ("관심 가는 흐름이네요", "변화가 눈에 들어오네요", "같은 부분을 보셨군요 🙂"),
     "ACK": ("ㅎㅎ 반가워요", "댓글 잘 봤어요 🙂", "반응 남겨주셔서 고맙습니다"),
+    # 2026-10-28: 감정·상황 의도. 실측 오응답 "공포 지림요 ㅠ → ㅎㅎ 반가워요",
+    # "좋은 하루 보내세요 → 댓글 잘 봤어요", "저는 B요 → 선택 감사합니다".
+    "WORRY": (
+        "마음 쓰이신다는 말씀 잘 읽었어요",
+        "걱정되는 마음을 나눠주셔서 고마워요",
+        "쉽지 않은 마음이 전해지네요",
+        "불안한 마음 충분히 이해돼요",
+    ),
+    "GREETING": (
+        "따뜻한 인사 고마워요, 편안한 시간 되세요 🙂",
+        "인사 남겨주셔서 감사해요 😊",
+        "덕분에 기분 좋아졌어요, 즐거운 시간 되세요",
+        "고마워요, 오늘도 무탈한 하루 되세요",
+    ),
+    "CHOICE": (
+        "고르신 쪽 잘 봤어요 🙂",
+        "고민해서 골라주신 답 반갑게 읽었어요",
+        "참여해 주셔서 고마워요 ㅎㅎ",
+        "어느 쪽이든 고민되는 선택이죠",
+    ),
+    "OPINION": (
+        "생각 자세히 적어주셔서 잘 읽었어요 😊",
+        "꼼꼼하게 풀어주신 의견 고맙습니다",
+        "정성스러운 의견 잘 읽었어요",
+        "길게 적어주신 생각 반갑게 봤어요 🙂",
+    ),
 }
+
+# 걱정·불안 신호. 강한 신호는 단독으로, 약한 신호('ㅠ', 어렵다 등)는 긍정 표현이
+# 없을 때만 인정한다 ("감사합니다ㅠㅠ"는 감동이지 걱정이 아니다).
+_WORRY_STRONG = re.compile(r"무섭|무서[워운]|공포|불안|걱정|쫄|버텨|버티|비상|겁나|멘붕|우울")
+_WORRY_WEAK = re.compile(r"어렵|어려[워운]|힘들|힘드|[ㅠㅜ]")
+_WORRY_NEGATED = re.compile(
+    r"(?:무섭|무서|불안|걱정|어렵|어려|힘들|힘드)\S*\s*(?:않|없|안\s|마세요|말아|ㄴㄴ)"
+    r"|(?:안|별로\s*안)\s*(?:무섭|어렵|힘들|불안)"
+)
+_WORRY_INDEX_NAMES = re.compile(r"공포\s*(?:탐욕|지수|&|와\s*탐욕)|공탐")
+_POSITIVE_CUES = re.compile(r"감사|고맙|고마워|좋|최고|감동|멋|대박|축하|사랑|행복|유익|ㅋ|ㅎ|👍")
+
+
+def _is_worry(body: str) -> bool:
+    text = _WORRY_INDEX_NAMES.sub(" ", body)
+    if _WORRY_NEGATED.search(text):
+        return False
+    if _WORRY_STRONG.search(text):
+        return True
+    return bool(_WORRY_WEAK.search(text)) and not _POSITIVE_CUES.search(text)
+_GREETING_PATTERN = re.compile(
+    r"(?:좋은|행복한|편안한|즐거운|따뜻한|멋진|활기찬)\s*(?:하루|밤|아침|저녁|주말|휴일|한\s*주|시간|명절)"
+    r"|(?:하루|밤|아침|저녁|주말|휴일|연휴)\s*(?:\S+\s*){0,2}(?:보내세요|되세요|보내시길|되시길)"
+    r"|^(?:좋은\s*아침|굿모닝|굿밤|안녕하세요)"
+    # 2026-10-28 live 실측: "저녁 맛있게 드세용" → 덕담을 상대의 경험으로 오독.
+    r"|(?:맛있게|맛나게|든든하게|맛난\s*거)\s*(?:\S+\s*){0,1}(?:드세|드시|먹어|챙겨)"
+    r"|(?:식사|저녁|점심|아침)\s*(?:\S+\s*){0,2}(?:드세|챙기세|하세)"
+    r"|맛저|맛점|굿나잇|좋은\s*꿈|푹\s*쉬세|편히\s*쉬세"
+)
+_CHOICE_LETTER = re.compile(r"(?<![A-Za-z])[ABab](?![A-Za-z])")
+_CHOICE_WORDS = re.compile(
+    r"선택|고르|골라|고를|할래|갈래|픽|[ABab]\s*(?:요|로|를|가|!|입니다|이요|쪽)"
+)
+
+
+def is_choice_comment(text: str, parent_text: str = "") -> bool:
+    """A/B 선택형 원글에 대한 선택 표명. 원글 표기 또는 선택 어휘가 함께 있어야 한다."""
+    body = normalize_comment(text)
+    if not _CHOICE_LETTER.search(body):
+        return False
+    parent = parent_text or ""
+    parent_is_vote = bool(re.search(r"A\s*[)\.:]", parent) and re.search(r"B\s*[)\.:]", parent))
+    return parent_is_vote or bool(_CHOICE_WORDS.search(body))
+
+
+def is_long_comment(text: str) -> bool:
+    return len(normalize_comment(text)) >= REPLY_LONG_COMMENT_CHARS
+
+
+def reply_max_length(comment_text: str) -> int:
+    """긴 의견 댓글에만 넓은 상한을 적용한다. 댓글 미지정 시 기존 상한."""
+    if comment_text and is_long_comment(comment_text):
+        return REPLY_MAX_LENGTH_LONG
+    return REPLY_MAX_LENGTH
 
 
 class BatchResult(dict):
@@ -75,6 +161,7 @@ class BatchResult(dict):
         self.usage = []
         self.unavailable_ids = set()
         self.sources = {}
+        self.candidates = {}  # id → AI 후보 목록 (생성기 전용, 순서 보존)
 
     def record_usage(self, result: dict) -> None:
         # Mock/legacy gateways without telemetry count logical calls, explicitly marked.
@@ -93,7 +180,7 @@ class BatchResult(dict):
         )
 
 
-def intent_for(text: str, label: str) -> str:
+def intent_for(text: str, label: str, parent_text: str = "") -> str:
     body = re.sub(r"@\w+", "", text or "").strip()
     if re.search(r"돈\s*복사|가즈아|떡상|수익\s*보장|확정\s*수익", body):
         return "MARKET_HYPE"
@@ -105,6 +192,12 @@ def intent_for(text: str, label: str) -> str:
         r"(?:축하|경하).*?(?:주셔서|주신|말씀).*?(?:감사|고맙|고마워)", body
     ):
         return "CONGRATULATIONS"
+    if _is_worry(body):
+        return "WORRY"
+    if _GREETING_PATTERN.search(normalize_comment(body)):
+        return "GREETING"
+    if is_choice_comment(body, parent_text):
+        return "CHOICE"
     if any(word in body for word in ("감사", "고맙", "고마워")):
         return "THANKS"
     if reader_contributes_content(body):
@@ -117,6 +210,8 @@ def intent_for(text: str, label: str) -> str:
         or re.search(r"(?:자료|정리|글|설명|분석|콘텐츠).*(?:좋|멋)", body)
     ):
         return "PRAISE"
+    if is_long_comment(body):
+        return "OPINION"
     # Never infer agreement with a market prediction from an ambiguous reaction.
     return "ACK"
 
@@ -183,6 +278,10 @@ def encode_metadata(tweet: dict, *, publish_attempt: bool = False) -> str:
             "last_decision_at": datetime.now(UTC).isoformat(),
         }
     )
+    # 생성 근거 (2026-10-28). 호출부가 넘긴 경우에만 갱신해 이전 근거를 보존한다.
+    for key in ("response_source", "draft_gate_reason", "intent"):
+        if f"_{key}" in tweet:
+            previous[key] = tweet[f"_{key}"]
     if publish_attempt:
         previous["next_attempt_at"] = (datetime.now(UTC) + timedelta(minutes=15)).isoformat()
     snapshot = previous.get("user_snapshot")

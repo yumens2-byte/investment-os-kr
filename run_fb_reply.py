@@ -506,6 +506,7 @@ def main() -> dict:
     # ── Step 5~8: 생성 → 게이트 → 발행 → 기록 ────────────────
     replies: dict[str, str] = {}
     reply_sources: dict[str, str] = {}
+    reply_candidates: dict[str, list[str]] = {}
     generated_ids: set[str] = set()
     summary["non_kr_replies"] = sum(lang.is_non_korean(t["text"]) for t in pass_items)
 
@@ -516,6 +517,7 @@ def main() -> dict:
         batch = generator.generate_batch(window, platform=fbc.PLATFORM)
         replies.update(batch)
         reply_sources.update(getattr(batch, "sources", {}))
+        reply_candidates.update(getattr(batch, "candidates", {}))
         generated_ids.update(t["id"] for t in window)
         for _ in range(getattr(batch, "api_calls", 0)):
             guard.record_gemini()
@@ -523,6 +525,7 @@ def main() -> dict:
         for entry in window:
             if entry.get("_retry") and entry.get("_stored_response_text"):
                 replies[entry["id"]] = entry["_stored_response_text"]
+                reply_candidates.pop(entry["id"], None)
 
     run_cap = fbc.FACE_REPLY_RUN_CAP
     summary["effective_run_cap"] = run_cap
@@ -593,19 +596,18 @@ def main() -> dict:
                     comment_id,
                     "TEMPLATE_NON_KR" if lang.is_non_korean(item["text"]) else "AI",
                 )
-            gate_ok, gate_reason = gate.check_reply(
-                reply_text, recent_texts, comment_text=item["text"]
+            # AI 후보 → 의도별 안전 풀 순서 (X와 동일한 gate.choose_reply, 2026-10-28)
+            chosen, chosen_source, gate_reason = gate.choose_reply(
+                reply_candidates.get(comment_id) or [reply_text],
+                generator.contextual_fallbacks(item), recent_texts,
+                comment_text=item["text"],
             )
             review_entry["draft_gate_reason"] = gate_reason
-            if not gate_ok:
-                for fallback_text in generator.contextual_fallbacks(item):
-                    if gate.check_reply(fallback_text, recent_texts, comment_text=item["text"])[0]:
-                        logger.info(f"[Gate] 초안 {gate_reason} → 안전 fallback 대체")
-                        reply_text = fallback_text
-                        response_source = "TEMPLATE_FALLBACK"
-                        gate_ok, gate_reason = True, None
-                        break
-            if not gate_ok:
+            if chosen is not None and chosen_source != "AI":
+                logger.info(f"[Gate] 초안 {gate_reason} → {chosen_source} 대체")
+                reply_text = chosen
+                response_source = chosen_source
+            if chosen is None:
                 skip_reason = gate_reason
             elif mode == "live" and not guard.can_write():
                 skip_reason = "BUDGET_WRITE"

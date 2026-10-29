@@ -20,10 +20,11 @@ from reply_engine.facebook import config as fbc
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# 2026-10-11 역할 반전 방지 지침을 명시적으로 추가한 생성 프롬프트 기준.
-# 분류 프롬프트는 2026-10-07 공통화 직전(main 352db47) 원본을 유지한다.
-X_GENERATOR_PROMPT_SHA256 = "11d5c831a3427e1159315b9dc7e0ddbcbb81b8f9ff34cf594d5b9b968ebca912"
-X_CLASSIFIER_PROMPT_SHA256 = "cab72b465686c338af8d8582f8466db6c146773bd8cb958f97c79bde06586c90"
+# 2026-10-28 자연스러운 호응 고도화: 생성 프롬프트(후보 3개·의도별 방향·max_len)와
+# 분류 프롬프트(QUESTION 범위 한정)를 의도적으로 변경한 기준.
+# docs/reply_upgrade_naturalness_20261028.md 3절·7절.
+X_GENERATOR_PROMPT_SHA256 = "e5bcc7a91cf8131ed56cec8108f79786e054f937226a2deef0854bac962c49e5"
+X_CLASSIFIER_PROMPT_SHA256 = "55044bfeeba9177eeee57d2371c6ff9a8e787672a4481db9bc79842c89ead3c0"
 
 _GEN_ITEMS = [
     {"id": "500", "text": "자료 정리 감사합니다", "label": "POSITIVE",

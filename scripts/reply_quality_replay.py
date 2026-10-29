@@ -151,23 +151,30 @@ def main() -> dict:
                 ) else f"CLASS_{review['label']}"
                 continue
             draft = replies.get(tid, "")
-            ok, reason = gate.check_reply(draft, recent, comment_text=review["comment"])
-            review.update(draft=draft, draft_gate=reason,
+            context = {**by_id[tid], "_account_user_id": my_id}
+            _ok, first_gate = gate.check_reply(
+                draft, recent, comment_text=review["comment"], context=context
+            )
+            review.update(draft=draft, draft_gate=first_gate,
                           source=getattr(replies, "sources", {}).get(tid, "UNKNOWN"))
-            final = draft
-            if not ok:
-                for candidate in generator.contextual_fallbacks(by_id[tid]):
-                    allowed, _ = gate.check_reply(candidate, recent, comment_text=review["comment"])
-                    if allowed:
-                        final, ok, reason = candidate, True, None
-                        review["source"] = "TEMPLATE_FALLBACK"
-                        break
+            # 운영 파이프라인과 같은 선택 순서: AI 후보 → 의도별 안전 풀 (2026-10-28)
+            chosen, chosen_source, reason = gate.choose_reply(
+                getattr(replies, "candidates", {}).get(tid) or [draft],
+                generator.contextual_fallbacks(by_id[tid]), recent,
+                comment_text=review["comment"], context=context,
+            )
+            ok = chosen is not None
+            final = chosen if ok else draft
+            if ok:
+                reason = None
+                if chosen_source != "AI":
+                    review["source"] = chosen_source
             review.update(final_reply=final if ok else None, final_gate=reason,
                           result="SIMULATED_PASS" if ok else reason)
             if ok:
                 recent.append(final)
                 report["simulated_pass"] += 1
-                if review["source"] == "AI" and final == draft:
+                if review["source"] in {"AI", "AI_ALT"}:
                     report["model_verified"] = True
         report["gate_verified"] = report["simulated_pass"] > 0
         if not report["gate_verified"]:

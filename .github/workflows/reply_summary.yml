@@ -7,7 +7,7 @@ name: reply-summary
 
 on:
   workflow_run:
-    workflows: ["reply-engine"]
+    workflows: ["X Reply Engine"]
     types: [completed]
 
 permissions:

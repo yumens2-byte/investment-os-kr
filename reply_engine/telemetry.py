@@ -74,6 +74,45 @@ def observed_metrics(review: list[dict], mode: str) -> dict:
     }
 
 
+def quality_metrics(review: list[dict], mode: str) -> dict:
+    """Selection metrics are observations, never a semantic accuracy score.
+
+    Only rows actually gated enter the denominator. Duplicate report rows do
+    not inflate rates; latest evaluated observation per comment wins.
+    """
+    evaluated = {
+        str(row["reply_tweet_id"]): row for row in review
+        if row.get("reply_tweet_id") and row.get("quality_evaluated") is True
+    }
+    rows = list(evaluated.values())
+    selected = [r for r in rows if r.get("result") in {
+        "PUBLISHED", "PUBLISHED_DB_UNCONFIRMED", "SIMULATED"
+    }]
+    actual = [r for r in selected if mode == "live" and r.get("result") != "SIMULATED"]
+    simulated = [r for r in selected if r.get("result") == "SIMULATED"]
+    def counts(items, field):
+        result = {}
+        for row in items:
+            key = row.get(field)
+            if key:
+                result[key] = result.get(key, 0) + 1
+        return result
+    return {
+        "coverage": "unique_evaluated_observations_only",
+        "evaluated": len(rows), "selected": len(selected),
+        "rejected_first_drafts": sum(bool(r.get("draft_gate_reason")) for r in rows),
+        "draft_gate_reasons": counts(rows, "draft_gate_reason"),
+        "actual_sources": counts(actual, "source"),
+        "simulated_sources": counts(simulated, "source"),
+        "template_selection_rate": (
+            round(sum(r.get("source") == "TEMPLATE_FALLBACK" for r in selected)
+                  / len(selected), 4) if selected else None
+        ),
+        "human_review_required": True,
+        "semantic_quality_verified": False,
+    }
+
+
 def new_run() -> dict:
     return {
         "run_id": os.getenv("GITHUB_RUN_ID") or uuid4().hex,
@@ -132,6 +171,7 @@ def write_run_report(summary: dict, guard=None, *, prefix: str = "reply_report")
               eligible=row.get("eligible"), result=row.get("result"),
               source=row.get("source"), draft_gate_reason=row.get("draft_gate_reason"))
     mode = summary.get("mode", "unknown")
+    summary["quality_metrics"] = quality_metrics(review, mode)
     summary["observed_metrics"] = observed_metrics(review, mode)
     summary["scope_metrics"] = {
         scope: observed_metrics([r for r in review if r.get("scope") == scope], mode)
