@@ -41,7 +41,7 @@ from backdata_engine.config import (
 from core import gemini_gateway
 from reply_engine import x_client
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +193,7 @@ def run_post(mode: str, now_kst: datetime) -> dict:
         return _finish(summary, "EXIT_RECORD_FAIL", ok=False, detail="insert_pending 실패")
     summary["post_id"] = post_id
     if mode == "shadow":
-        logger.info(f"[SHADOW] 원장 적재 완료 (발행 없음): id={post_id}")
+        logger.info(f"[SHADOW] 원장 적재 완료 (발행 없음): row={post_id}")
         return _finish(summary, "EXIT_OK", ok=True)
 
     # S7 live
@@ -238,7 +238,8 @@ def run_post(mode: str, now_kst: datetime) -> dict:
     if not record_ok:
         return _finish(summary, "EXIT_RECORD_FAIL", ok=False, detail=f"id={post_id}")
     if len(posted) == 2:
-        logger.info(f"[Backdata] 발행 완료 x={tweet_id} fb={fb_id}")
+        logger.info(f"[Backdata] 발행 완료 x={notify.mask_id(tweet_id)} "
+                    f"fb={notify.mask_id(fb_id)}")
         warn = summary.get("warnings")
         return _finish(summary, "EXIT_OK", ok=True, notify=bool(warn),
                        detail=f"warnings={warn}" if warn else "")
@@ -314,6 +315,16 @@ def run_metrics(mode: str, now_utc: datetime) -> dict:
 
 
 # ── preflight ────────────────────────────────────────────────────────
+def _x_account_ok(client) -> bool:
+    """X 계정 확인. x_client.fetch_my_user_id는 user_id를 로그에 남기므로 쓰지 않는다 (v0.1.2)."""
+    try:
+        resp = client.get_me(user_auth=True)
+        return bool(resp and getattr(resp, "data", None))
+    except Exception as exc:
+        logger.error(f"[Preflight] X get_me 실패: {type(exc).__name__}")
+        return False
+
+
 def run_preflight(mode: str) -> dict:
     summary: dict = {"version": VERSION, "step": "preflight", "mode": mode,
                      "success": False, "exit_reason": None, "checks": {}}
@@ -338,7 +349,9 @@ def run_preflight(mode: str) -> dict:
     else:
         checks["fb_page_identity"] = "NO_CREDENTIALS"
     client = x_client.get_x_client()
-    checks["x_get_me"] = "ok" if client and x_client.fetch_my_user_id(client) else "failed"
+    checks["x_get_me"] = "ok" if client and _x_account_ok(client) else "failed"
+    for key, value in list(checks.items()):
+        checks[key] = notify.scrub(value, page_id, token)
     failed = [k for k, v in checks.items()
               if v not in ("ok", "no_post") and not str(v).startswith("unverified")]
     summary["failed"] = failed

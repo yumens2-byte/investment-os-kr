@@ -121,3 +121,20 @@ def test_notify_noop_without_config(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_ALERT_CHAT_ID", raising=False)
     assert notify.send("hi") is False
+
+
+def test_publish_success_logs_masked_ids(monkeypatch, caplog):
+    with caplog.at_level("INFO"):
+        x_publisher.post_text(_Client(data={"id": 1855000000000001234}), "t")
+    ok = _Resp(200, {"id": "998877665544_5566"})
+    monkeypatch.setattr(fb_publisher.fbclient, "_http_post",
+                        lambda url, data=None, timeout=None: ok)
+    with caplog.at_level("INFO"):
+        fb_publisher.post_feed("998877665544", "EAAB1234567890", "m")
+    assert "1855000000000001234" not in caplog.text and "***1234" in caplog.text
+    assert "998877665544" not in caplog.text and "***5566" in caplog.text
+
+
+def test_mask_and_scrub():
+    assert notify.mask_id("12") == "***" and notify.mask_id("123456") == "***3456"
+    assert notify.scrub("page 998877 err", "998877", "") == "page *** err"

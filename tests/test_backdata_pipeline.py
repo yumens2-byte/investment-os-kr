@@ -287,10 +287,48 @@ def test_preflight_logs_failed_checks_with_masked_token(monkeypatch, tmp_path, c
     monkeypatch.setattr(rb.fbpub, "fetch_insights",
                         lambda pid, t: (None, "graph_error code=100 message=invalid metric"))
     monkeypatch.setattr(rb.x_client, "get_x_client", lambda: object())
-    monkeypatch.setattr(rb.x_client, "fetch_my_user_id", lambda c: "1")
+    monkeypatch.setattr(rb, "_x_account_ok", lambda c: True)
     with caplog.at_level("INFO"):
         out = rb.run_preflight("dry_run")
     assert out["exit_reason"] == "EXIT_PREFLIGHT_FAIL" and out["failed"] == ["fb_insights_read"]
     assert any("invalid metric" in r.message for r in caplog.records)
     assert sent and "fb_insights_read=graph_error code=100" in sent[0]
     assert token not in caplog.text and all(token not in s for s in sent)
+
+
+def test_preflight_does_not_log_x_user_id(monkeypatch, tmp_path, caplog):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FACE_PAGE_ID", raising=False)
+    monkeypatch.delenv("FACE_PAGE_TOKEN", raising=False)
+    monkeypatch.setattr(rb.notify, "send", lambda t: True)
+
+    class Me:
+        id = 1914000000000000555
+
+    class Resp:
+        data = Me()
+
+    class C:
+        def get_me(self, user_auth=True):
+            return Resp()
+    monkeypatch.setattr(rb.x_client, "get_x_client", lambda: C())
+    with caplog.at_level("INFO"):
+        out = rb.run_preflight("dry_run")
+    assert out["checks"]["x_get_me"] == "ok"
+    assert "1914000000000000555" not in caplog.text
+
+
+def test_preflight_scrubs_page_id_from_checks(monkeypatch, tmp_path, caplog):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FACE_PAGE_ID", "998877665544")
+    monkeypatch.setenv("FACE_PAGE_TOKEN", "EAAB_SECRET_TOKEN_123")
+    sent = []
+    monkeypatch.setattr(rb.notify, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr(rb.fbpub.fbclient, "fetch_page_identity",
+                        lambda p, t: (None, {"code": 100, "message": "no object 998877665544"}))
+    monkeypatch.setattr(rb.fbpub.fbclient, "graph_get", lambda path, t, params: (None, None, None))
+    monkeypatch.setattr(rb, "_x_account_ok", lambda c: True)
+    monkeypatch.setattr(rb.x_client, "get_x_client", lambda: object())
+    with caplog.at_level("INFO"):
+        rb.run_preflight("dry_run")
+    assert "998877665544" not in caplog.text and all("998877665544" not in s for s in sent)
