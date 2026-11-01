@@ -377,6 +377,7 @@ def test_preflight_page_token_match_passes(monkeypatch, tmp_path):
     _preflight_env(monkeypatch, tmp_path, {
         "me": ({"id": "998877665544"}, None, None),
         "feed": ({"data": [{"id": "998877665544_1"}]}, None, None),
+        "insights": ({"data": []}, None, None),
     })
     monkeypatch.setattr(rb.fbpub, "fetch_insights", lambda pid, t: ({"raw": {}}, None))
     out = rb.run_preflight("dry_run")
@@ -390,8 +391,21 @@ def test_preflight_page_token_without_feed_read_passes(monkeypatch, tmp_path):
     _preflight_env(monkeypatch, tmp_path, {
         "me": ({"id": "998877665544"}, None, None),
         "feed": (None, feed_err, None),
+        "insights": ({"data": []}, None, None),
     })
     out = rb.run_preflight("dry_run")
     assert out["exit_reason"] == "EXIT_OK", out["failed"]
     assert out["checks"]["fb_token_kind"] == "page_token_match"
     assert out["checks"]["fb_feed_read_info"].startswith("not_granted")
+    assert out["checks"]["fb_page_insights_read"] == "ok"
+
+
+def test_preflight_fails_when_page_insights_denied(monkeypatch, tmp_path):
+    _preflight_env(monkeypatch, tmp_path, {
+        "me": ({"id": "998877665544"}, None, None),
+        "feed": (None, {"code": 10, "message": "x"}, None),
+        "insights": (None, {"code": 10, "message": "requires read_insights"}, None),
+    })
+    out = rb.run_preflight("dry_run")
+    assert out["exit_reason"] == "EXIT_PREFLIGHT_FAIL"
+    assert out["failed"] == ["fb_page_insights_read"]

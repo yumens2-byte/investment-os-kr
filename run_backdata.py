@@ -41,7 +41,7 @@ from backdata_engine.config import (
 from core import gemini_gateway
 from reply_engine import x_client
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +367,10 @@ def run_preflight(mode: str) -> dict:
         checks["fb_feed_read_info"] = "ok" if not err else (
             "not_granted (pages_read_user_content 필요 — 발행에는 불필요): "
             + fbpub.fbclient.format_error(err))
+        # 페이지 단위 인사이트 — 게시물 ID 없이 read_insights 보유 여부 확인 (v0.1.5)
+        _pi, pierr, _ = fbpub.fbclient.graph_get(
+            f"{page_id}/insights", token, {"metric": "page_media_view", "period": "day"})
+        checks["fb_page_insights_read"] = "ok" if not pierr else fbpub.fbclient.format_error(pierr)
         latest = ((feed or {}).get("data") or [{}])[0].get("id")
         if latest:
             _ins, ierr = fbpub.fetch_insights(latest, token)
