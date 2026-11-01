@@ -34,14 +34,14 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(rb.history, "fetch_closes", lambda s: rows)
     monkeypatch.setattr(rb.store, "slot_taken", lambda d, m: rec.add("slot_taken") or False)
     monkeypatch.setattr(rb.store, "insert_pending",
-                        lambda r: rec.add("insert_pending", r) or 7)
+                        lambda r: rec.add("insert_pending", r) or (7, None))
     monkeypatch.setattr(rb.store, "update_channel",
                         lambda pid, ch, st, ext_id=None, error=None:
                         rec.add("update", ch, st) or True)
     monkeypatch.setattr(rb.gemini_gateway, "call",
                         lambda prompt, **kw: {"success": False, "data": None,
                                               "api_calls": 0, "error": "off"})
-    monkeypatch.setattr(rb.alert, "send_admin_alert", lambda t: rec.add("alert", t) or True)
+    monkeypatch.setattr(rb.notify, "send", lambda t: rec.add("alert", t) or True)
     monkeypatch.setattr(rb, "_sleep", lambda s: rec.add("sleep", s))
     monkeypatch.setattr(rb.x_client, "get_x_client", lambda: object())
     monkeypatch.setattr(rb.xpub, "post_text", lambda c, t: rec.add("x_post") or ("111", None))
@@ -126,9 +126,32 @@ def test_slot_taken(env, monkeypatch):
 
 def test_duplicate_insert_blocks_publish(env, monkeypatch):
     rec, now, _ = env
-    monkeypatch.setattr(rb.store, "insert_pending", lambda r: None)
+    monkeypatch.setattr(rb.store, "insert_pending", lambda r: (None, "conflict"))
     assert rb.run_post("live", now)["exit_reason"] == "EXIT_DUP_FINAL"
     assert "x_post" not in rec.names()
+
+
+def test_insert_db_error_is_record_fail_with_alert(env, monkeypatch):
+    rec, now, _ = env
+    monkeypatch.setattr(rb.store, "insert_pending", lambda r: (None, "error"))
+    out = rb.run_post("live", now)
+    assert out["exit_reason"] == "EXIT_RECORD_FAIL" and out["success"] is False
+    assert "x_post" not in rec.names() and any(c[0] == "alert" for c in rec.calls)
+
+
+def test_slot_query_error_is_record_fail(env, monkeypatch):
+    rec, now, _ = env
+    monkeypatch.setattr(rb.store, "slot_taken", lambda d, m: None)
+    assert rb.run_post("shadow", now)["exit_reason"] == "EXIT_RECORD_FAIL"
+    assert "insert_pending" not in rec.names()
+
+
+def test_one_index_fetch_failed_alerts_but_continues(env, monkeypatch):
+    rec, now, rows = env
+    monkeypatch.setattr(rb.history, "fetch_closes", lambda s: rows if s == "^KS11" else None)
+    out = rb.run_post("dry_run", now)
+    assert out["exit_reason"] == "EXIT_OK"
+    assert out["warnings"] == ["fetch_failed=['^KQ11']"]
 
 
 def test_fetch_failure_is_data_fail(env, monkeypatch):
@@ -156,7 +179,7 @@ def test_delay_parser(monkeypatch, raw, expected):
 def test_disabled(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BACKDATA_ENABLED", "false")
-    monkeypatch.setattr(rb.alert, "send_admin_alert", lambda t: True)
+    monkeypatch.setattr(rb.notify, "send", lambda t: True)
     assert rb.main(["--step", "post"])["exit_reason"] == "EXIT_DISABLED"
 
 
@@ -204,3 +227,22 @@ def test_metrics_live_inserts(monkeypatch, tmp_path):
     out = rb.run_metrics("live", now)
     assert out["collected"] == 2
     assert {(r["channel"], r["checkpoint"]) for r in rows} == {("x", "first"), ("fb", "first")}
+
+
+def test_metrics_x_credentials_missing_still_collects_fb(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    now = datetime(2026, 11, 10, tzinfo=UTC)
+    ts = (now - timedelta(hours=30)).isoformat()
+    monkeypatch.setattr(rb.store, "list_metric_targets", lambda n, d: [
+        {"id": 7, "x_post_id": "111", "x_posted_at": ts, "fb_post_id": "p_222",
+         "fb_posted_at": ts, "collected": set()}])
+    rows = []
+    monkeypatch.setattr(rb.store, "insert_metric", lambda r: rows.append(r) or True)
+    monkeypatch.setattr(rb.x_client, "get_x_client", lambda: None)
+    monkeypatch.setattr(rb.fbpub, "fetch_insights", lambda pid, tok: (
+        {"impressions": 300, "engagements": 9, "raw": {}}, None))
+    monkeypatch.setattr(rb.notify, "send", lambda t: True)
+    monkeypatch.setenv("FACE_PAGE_TOKEN", "tok")
+    out = rb.run_metrics("live", now)
+    assert [r["channel"] for r in rows] == ["fb"]
+    assert {"channel": "x", "error": "NO_CREDENTIALS"} in out["errors"]

@@ -1,10 +1,13 @@
 name: Backdata Card
 
-# DN2026_0090 백데이터 반전 카드 — KST 평일 17:41 (장 마감 15:30 이후, 비정각 STD-SCHED-02)
-# 인접 cron: following 매시 :23 / reply 09:17 UTC / shock 06:55 UTC
+# DN2026_0090 백데이터 반전 카드 (비정각 STD-SCHED-02, cron 문자열은 아래 job if와 같이 바꾼다 STD-SCHED-01)
+#   발행: "41 8 * * 1-5"   = KST 평일 17:41 (장 마감 15:30 이후)
+#   성과: "7 1,9,17 * * *" = KST 매일 10:07·18:07·02:07 (8시간 간격 → 24h·72h 체크포인트를 8h 이내 오차로 수집)
+# 인접 cron: following 매시 :23 / reply 1,4,9,13시 :17 UTC / collect 1,7,13,19시 :47 UTC / shock 06:55 UTC
 on:
   schedule:
     - cron: "41 8 * * 1-5"
+    - cron: "7 1,9,17 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -37,7 +40,7 @@ jobs:
 
   metrics:
     needs: test
-    if: github.event_name == 'schedule' || inputs.step == 'metrics'
+    if: (github.event_name == 'schedule' && github.event.schedule == '7 1,9,17 * * *') || (github.event_name == 'workflow_dispatch' && inputs.step == 'metrics')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -72,7 +75,7 @@ jobs:
 
   post:
     needs: test
-    if: github.event_name == 'schedule' || inputs.step != 'metrics'
+    if: (github.event_name == 'schedule' && github.event.schedule == '41 8 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.step != 'metrics')
     runs-on: ubuntu-latest
     timeout-minutes: 60        # 랜덤 지연 최대 40분(BACKDATA_DELAY_MAX_SEC 상한 2400) + 처리
     steps:

@@ -27,7 +27,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from backdata_engine import composer, history, metrics, stats, store
+from backdata_engine import composer, history, metrics, notify, stats, store
 from backdata_engine import fb_publisher as fbpub
 from backdata_engine import x_publisher as xpub
 from backdata_engine.config import (
@@ -38,7 +38,7 @@ from backdata_engine.config import (
     get_mode,
     is_enabled,
 )
-from core import alert, gemini_gateway
+from core import gemini_gateway
 from reply_engine import x_client
 
 VERSION = "0.1.0"
@@ -79,7 +79,7 @@ def _write_report(summary: dict) -> None:
 
 
 def _alert(summary: dict, detail: str = "") -> None:
-    alert.send_admin_alert(
+    notify.send(
         f"[Backdata] {summary['step']} {summary['exit_reason']} mode={summary['mode']} {detail}"
         .strip()
     )
@@ -122,13 +122,21 @@ def run_post(mode: str, now_kst: datetime) -> dict:
             fresh[symbol] = rows
     if all(v.get("status") == "fetch_failed" for v in summary["indexes"].values()):
         return _finish(summary, "EXIT_DATA_FAIL", ok=False)
+    failed = [s for s, v in summary["indexes"].items() if v.get("status") == "fetch_failed"]
     if not fresh:
         logger.warning(f"[S1] 당일({trade_date}) 봉 없음 — 휴장 또는 데이터 지연, 무발행")
-        return _finish(summary, "EXIT_STALE", ok=True)
+        return _finish(summary, "EXIT_STALE", ok=True, notify=bool(failed),
+                       detail=f"fetch_failed={failed}" if failed else "")
+    if failed:
+        summary["warnings"] = [f"fetch_failed={failed}"]
 
     # S2 거래일 중복
-    if db_write and store.slot_taken(trade_date, mode):
-        return _finish(summary, "EXIT_SLOT_TAKEN", ok=True)
+    if db_write:
+        taken = store.slot_taken(trade_date, mode)
+        if taken is None:
+            return _finish(summary, "EXIT_RECORD_FAIL", ok=False, detail="slot_taken 조회 실패")
+        if taken:
+            return _finish(summary, "EXIT_SLOT_TAKEN", ok=True)
 
     # S3 통계
     names = dict(INDEXES)
@@ -166,10 +174,12 @@ def run_post(mode: str, now_kst: datetime) -> dict:
         "hook_source": comp["hook_source"],
         "x_status": "pending", "fb_status": "pending", "version": VERSION,
     }
-    post_id = store.insert_pending(record)
+    post_id, insert_err = store.insert_pending(record)
     summary["calls"]["db_write"] += 1
-    if post_id is None:
+    if insert_err == "conflict":
         return _finish(summary, "EXIT_DUP_FINAL", ok=True)
+    if post_id is None:
+        return _finish(summary, "EXIT_RECORD_FAIL", ok=False, detail="insert_pending 실패")
     summary["post_id"] = post_id
     if mode == "shadow":
         logger.info(f"[SHADOW] 원장 적재 완료 (발행 없음): id={post_id}")
@@ -254,11 +264,13 @@ def run_metrics(mode: str, now_utc: datetime) -> dict:
     if x_ids:
         client = x_client.get_x_client()
         if client is None:
-            return _finish(summary, "EXIT_NO_CREDENTIALS", ok=False)
-        x_data, err = xpub.fetch_metrics(client, x_ids)
-        summary["calls"]["x_read"] += len(x_ids)
-        if err:
-            summary["errors"].append({"channel": "x", "error": err[:200]})
+            # X 키 문제로 FB 수집까지 막지 않는다 (R6 제안)
+            summary["errors"].append({"channel": "x", "error": "NO_CREDENTIALS"})
+        else:
+            x_data, err = xpub.fetch_metrics(client, x_ids)
+            summary["calls"]["x_read"] += len(x_ids)
+            if err:
+                summary["errors"].append({"channel": "x", "error": err[:200]})
     token = os.environ.get("FACE_PAGE_TOKEN", "").strip()
 
     for p, ch, cp, hours in due:

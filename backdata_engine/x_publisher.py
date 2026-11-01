@@ -17,13 +17,27 @@ logger = logging.getLogger(__name__)
 METRIC_FIELDS = ["public_metrics", "non_public_metrics", "organic_metrics", "created_at"]
 
 
+def is_unknown_exception(exc: Exception) -> bool:
+    """요청이 서버에 닿았는지 알 수 없는 예외 — 타임아웃·연결 끊김·5xx (R6-02)."""
+    import requests  # noqa: PLC0415
+    import tweepy  # noqa: PLC0415
+
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    return isinstance(exc, tweepy.TwitterServerError)
+
+
 def post_text(client: Any, text: str) -> tuple[str | None, str | None]:
-    """(tweet_id | None, 오류 | None). 응답에 id가 없으면 결과 불명으로 오류 반환."""
+    """
+    (tweet_id | None, 오류 | None). 결과 불명(타임아웃·연결·5xx·id 없는 성공)은
+    오류 문자열 앞에 'UNKNOWN:'을 붙인다 — 호출부가 failed가 아니라 unknown으로 기록한다.
+    """
     try:
         resp = client.create_tweet(text=text, user_auth=True)
     except Exception as exc:
-        logger.error(f"[BXPub] 발행 실패 (재시도 안 함): {exc}")
-        return None, str(exc)
+        prefix = "UNKNOWN: " if is_unknown_exception(exc) else ""
+        logger.error(f"[BXPub] 발행 실패 (재시도 안 함): {prefix}{type(exc).__name__}")
+        return None, f"{prefix}{type(exc).__name__}: {str(exc)[:300]}"
     try:
         tweet_id = str(resp.data["id"])
     except Exception:

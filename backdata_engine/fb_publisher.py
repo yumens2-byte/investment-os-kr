@@ -29,6 +29,9 @@ def post_feed(page_id: str, token: str, message: str) -> tuple[str | None, str |
     )
     if error:
         text = fbclient.format_error(error)
+        # 코드 없음(전송 오류·타임아웃·비JSON)·일시 오류(1/2)는 결과 불명 (R6-02)
+        if fbclient.classify_error(error) == "UNKNOWN":
+            text = f"UNKNOWN: {text}"
         logger.error(f"[BFBPub] 발행 실패 (재시도 안 함): {text}")
         return None, text
     post_id = str((payload or {}).get("id") or "")

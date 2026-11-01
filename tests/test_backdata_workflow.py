@@ -15,8 +15,12 @@ def _text() -> str:
     return YML.read_text(encoding="utf-8")
 
 
-def test_cron_is_weekday_1741_kst():
-    assert '- cron: "41 8 * * 1-5"' in _text()
+def test_crons_and_job_conditions_match():
+    text = _text()
+    assert '- cron: "41 8 * * 1-5"' in text and '- cron: "7 1,9,17 * * *"' in text
+    assert "github.event.schedule == '7 1,9,17 * * *'" in text      # metrics job
+    assert "github.event.schedule == '41 8 * * 1-5'" in text        # post job
+    assert "inputs.step == 'metrics'" in text and "inputs.step != 'metrics'" in text
 
 
 def test_mode_uses_standard_expression_everywhere():

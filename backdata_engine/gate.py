@@ -23,6 +23,7 @@ from backdata_engine.config import (
     BANNED_TERMS,
     DISCLAIMER,
     FB_MAX_CHARS,
+    HOOK_BANNED_TERMS,
     X_MAX_WEIGHTED,
 )
 
@@ -84,12 +85,23 @@ def check_text(text: str, allowed_numbers: set[float], platform: str) -> tuple[b
     return True, None
 
 
-def check_hook(hook: str, allowed_numbers: set[float], max_chars: int) -> tuple[bool, str | None]:
-    """LLM 훅 1줄 사전 검사 (고지 검사 제외, 줄바꿈 금지)."""
+def check_hook(hook: str, label_numbers: set[float], max_chars: int) -> tuple[bool, str | None]:
+    """
+    LLM 훅 1줄 사전 검사 (R6-01 치명 반영).
+    숫자는 조건 라벨에 있는 숫자만 허용한다 — 통계 수치·날짜·기간 숫자를 훅에 쓰면
+    부호·문맥 검증 없이 본문과 모순되는 문안이 나올 수 있다("20일 뒤 -2.5% 하락?").
+    영문자는 금지(영어 권유문 우회 차단), 훅 전용 금칙어를 추가로 본다.
+    """
     h = (hook or "").strip()
     if not h or "\n" in h:
         return False, "GATE_EMPTY"
     if len(h) > max_chars:
         return False, "GATE_LENGTH"
+    if re.search(r"[A-Za-z]", h):
+        return False, "GATE_CHARSET"
+    if any(term in h for term in HOOK_BANNED_TERMS):
+        return False, "GATE_BANNED"
+    if re.search(r"[+\-−]\s*\d", h):
+        return False, "GATE_NUMBER"
     probe = f"{h}\n{DISCLAIMER}"
-    return check_text(probe, allowed_numbers, "x")
+    return check_text(probe, label_numbers, "x")

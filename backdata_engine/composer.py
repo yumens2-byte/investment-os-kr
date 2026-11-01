@@ -50,6 +50,9 @@ def _fmt_up(ratio: float) -> int:
 
 
 def _fmt_med(pct: float) -> str:
+    """부호 포함 소수 1자리. ±0.05 미만은 '0.0'(R6 제안: '-0.0%' 방지)."""
+    if abs(pct) < 0.05:
+        return "0.0"
     return f"{pct:+.1f}"
 
 
@@ -75,10 +78,10 @@ def numbers_of(stats: dict) -> dict:
         *(float(h) for h in HORIZONS),
     }
     allowed.update(float(p) for p in today.split("-"))
-    # 조건 라벨 속 숫자 (예: 5일 연속, 52주, 2~3%)
-    for tok in gate._NUMBER_PATTERN.findall(stats["condition_label"]):
-        allowed.add(float(tok))
-    return {"values": values, "allowed": allowed}
+    # 조건 라벨 속 숫자 (예: 5일 연속, 52주, 2~3%) — 훅에는 이 숫자만 허용한다
+    label_numbers = {float(t) for t in gate._NUMBER_PATTERN.findall(stats["condition_label"])}
+    allowed.update(label_numbers)
+    return {"values": values, "allowed": allowed, "label_numbers": label_numbers}
 
 
 def fixed_hooks(stats: dict) -> list[str]:
@@ -152,7 +155,7 @@ def compose(stats: dict, gemini_call) -> dict:
     hook, llm_meta = llm_hook(stats, gemini_call)
     candidates: list[tuple[str, str]] = []
     if hook:
-        ok, reason = gate.check_hook(hook, allowed, HOOK_MAX_CHARS)
+        ok, reason = gate.check_hook(hook, nums["label_numbers"], HOOK_MAX_CHARS)
         if ok:
             candidates.append(("llm", hook))
         else:

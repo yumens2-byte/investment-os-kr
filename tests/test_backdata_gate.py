@@ -104,6 +104,17 @@ def test_compose_llm_hook_used_and_free_only():
     "과거 87% 반등한 신호",            # 통계에 없는 숫자
     "댓글로 의견 주세요",              # 반응 유도
     "아주 길게 늘어진 훅 문장이라서 사십 자를 훌쩍 넘겨 버리는 경우의 예시 문장입니다",
+    # R6-01 치명: 통계·날짜·기간 숫자를 훅에 재사용해 본문과 모순되는 경우
+    "20일 뒤 -2.5% 하락?",
+    "코스피 11% 폭락 신호?",
+    "다음 날 상승 확률 20%?",
+    "57번 중 반등은?",
+    # R6-03: 금칙어 우회
+    "지금 담아야 할 때일까?",
+    "저점 매집 타이밍?",
+    "Buy the dip?",
+    "반등 전망 나왔다",
+    "알림 설정하고 지켜보세요",
 ])
 def test_compose_bad_llm_hook_falls_back(hook):
     out = composer.compose(STATS, _gemini(hook))
@@ -121,3 +132,15 @@ def test_compose_fails_closed_when_template_breaks(monkeypatch):
     monkeypatch.setattr(composer, "DISCLAIMER", "※ 다른 문구")
     out = composer.compose(STATS, _gemini("코스피 5일 연속 하락, 그다음은?"))
     assert out["ok"] is False and out["text_x"] is None
+
+
+def test_hook_may_use_label_numbers_only():
+    ok, _ = gate.check_hook("코스피 5일 연속 하락, 다음은?", {5.0}, 40)
+    assert ok
+    assert gate.check_hook("코스피 6일 연속 하락?", {5.0}, 40) == (False, "GATE_NUMBER")
+
+
+@pytest.mark.parametrize("pct,expected", [(-0.04, "0.0"), (0.049, "0.0"), (0.05, "+0.1"),
+                                          (-1.26, "-1.3"), (2.46, "+2.5")])
+def test_median_format(pct, expected):
+    assert composer._fmt_med(pct) == expected

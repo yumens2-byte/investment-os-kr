@@ -4,7 +4,8 @@ backdata_engine/store.py — kr_backdata_post / kr_backdata_metrics CRUD (DN2026
 중복 방지:
   UNIQUE(trade_date, mode)  — 거래일당 1건 (D-2 전용 상한)
   UNIQUE(text_hash, mode)   — 같은 문구 재발행 금지 (STD-PUB-06)
-조회 실패는 '이미 처리됨'으로 간주해 발행을 막는다 (fail-safe).
+조회·쓰기 실패는 발행을 막되(fail-safe), 중복 충돌과 DB 오류를 구분해 반환한다(R6-04):
+DB 오류는 호출부가 EXIT_RECORD_FAIL(종료코드 1·운영자 알림)로 보고한다.
 """
 
 from __future__ import annotations
@@ -22,7 +23,15 @@ POST_TABLE = "kr_backdata_post"
 METRIC_TABLE = "kr_backdata_metrics"
 
 
-def slot_taken(trade_date: str, mode: str) -> bool:
+def is_conflict(exc: Exception) -> bool:
+    """UNIQUE 위반(PostgreSQL 23505) 여부."""
+    code = getattr(exc, "code", None)
+    text = str(exc)
+    return code == "23505" or "23505" in text or "duplicate key" in text.lower()
+
+
+def slot_taken(trade_date: str, mode: str) -> bool | None:
+    """True=처리됨 / False=미처리 / None=조회 실패(호출부 발행 금지 + 오류 보고)."""
     try:
         result = (
             get_client().table(POST_TABLE).select("id")
@@ -30,19 +39,25 @@ def slot_taken(trade_date: str, mode: str) -> bool:
         )
         return bool(result.data)
     except Exception as exc:
-        logger.error(f"[BStore] slot_taken 실패 (보수적 True): {exc}")
-        return True
+        logger.error(f"[BStore] slot_taken 실패: {type(exc).__name__}: {str(exc)[:200]}")
+        return None
 
 
-def insert_pending(record: dict) -> int | None:
-    """pending 선기록 (STD-PUB-01). 충돌·실패 시 None → 호출부 발행 금지."""
+def insert_pending(record: dict) -> tuple[int | None, str | None]:
+    """pending 선기록 (STD-PUB-01). (id, None) / (None, 'conflict') / (None, 'error')."""
     try:
         result = get_client().table(POST_TABLE).insert(record).execute()
-        rows = result.data or []
-        return int(rows[0]["id"]) if rows and rows[0].get("id") is not None else None
     except Exception as exc:
-        logger.warning(f"[BStore] INSERT 실패/충돌 (발행 금지): {exc}")
-        return None
+        if is_conflict(exc):
+            logger.warning("[BStore] INSERT 충돌 (중복 — 발행 금지)")
+            return None, "conflict"
+        logger.error(f"[BStore] INSERT 실패 (발행 금지): {type(exc).__name__}: {str(exc)[:200]}")
+        return None, "error"
+    rows = result.data or []
+    if rows and rows[0].get("id") is not None:
+        return int(rows[0]["id"]), None
+    logger.error("[BStore] INSERT 응답에 id 없음 (발행 금지)")
+    return None, "error"
 
 
 def update_channel(post_id: int, channel: str, status: str,
