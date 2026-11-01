@@ -276,14 +276,17 @@ def test_finish_logs_summary_line(env, caplog):
 def test_preflight_logs_failed_checks_with_masked_token(monkeypatch, tmp_path, caplog):
     monkeypatch.chdir(tmp_path)
     token = "EAAB_SECRET_TOKEN_123"
-    monkeypatch.setenv("FACE_PAGE_ID", "page")
+    monkeypatch.setenv("FACE_PAGE_ID", "556677889900")
     monkeypatch.setenv("FACE_PAGE_TOKEN", token)
     sent = []
     monkeypatch.setattr(rb.notify, "send", lambda t: sent.append(t) or True)
     monkeypatch.setattr(rb.fbpub.fbclient, "fetch_page_identity",
-                        lambda p, t: ({"id": "page"}, None))
-    monkeypatch.setattr(rb.fbpub.fbclient, "graph_get",
-                        lambda path, t, params: ({"data": [{"id": "p_1"}]}, None, None))
+                        lambda p, t: ({"id": "556677889900"}, None))
+    def gg(path, t, params):
+        if path == "me":
+            return {"id": "556677889900"}, None, None
+        return {"data": [{"id": "p_1"}]}, None, None
+    monkeypatch.setattr(rb.fbpub.fbclient, "graph_get", gg)
     monkeypatch.setattr(rb.fbpub, "fetch_insights",
                         lambda pid, t: (None, "graph_error code=100 message=invalid metric"))
     monkeypatch.setattr(rb.x_client, "get_x_client", lambda: object())
@@ -332,3 +335,50 @@ def test_preflight_scrubs_page_id_from_checks(monkeypatch, tmp_path, caplog):
     with caplog.at_level("INFO"):
         rb.run_preflight("dry_run")
     assert "998877665544" not in caplog.text and all("998877665544" not in s for s in sent)
+
+
+
+def _preflight_env(monkeypatch, tmp_path, routes):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FACE_PAGE_ID", "998877665544")
+    monkeypatch.setenv("FACE_PAGE_TOKEN", "EAAB_SECRET_TOKEN_123")
+    monkeypatch.setattr(rb.notify, "send", lambda t: True)
+    monkeypatch.setattr(rb.fbpub.fbclient, "fetch_page_identity",
+                        lambda p, t: ({"id": p}, None))
+    monkeypatch.setattr(rb.fbpub.fbclient, "graph_get",
+                        lambda path, t, params: routes.get(path.split("/")[-1] if "/" in path
+                                                           else path, (None, None, None)))
+    monkeypatch.setattr(rb, "_x_account_ok", lambda c: True)
+    monkeypatch.setattr(rb.x_client, "get_x_client", lambda: object())
+
+
+def test_preflight_detects_user_token(monkeypatch, tmp_path, caplog):
+    feed_err = {"code": 10, "message": "requires pages_read_engagement"}
+    _preflight_env(monkeypatch, tmp_path, {
+        "me": ({"id": "1111222233334444"}, None, None),
+        "permissions": ({"data": [
+            {"permission": "pages_read_engagement", "status": "granted"},
+            {"permission": "pages_manage_posts", "status": "granted"},
+            {"permission": "read_insights", "status": "declined"}]}, None, None),
+        "feed": (None, feed_err, None),
+    })
+    with caplog.at_level("INFO"):
+        out = rb.run_preflight("dry_run")
+    c = out["checks"]
+    assert c["fb_token_kind"].startswith("user_token")
+    assert c["fb_token_permissions"] == "pages_manage_posts,pages_read_engagement"
+    assert c["fb_feed_read"].startswith("graph_error code=10")
+    assert c["fb_insights_read"].startswith("skipped")
+    assert set(out["failed"]) == {"fb_token_kind", "fb_feed_read"}
+    assert "1111222233334444" not in caplog.text and "998877665544" not in caplog.text
+
+
+def test_preflight_page_token_match_passes(monkeypatch, tmp_path):
+    _preflight_env(monkeypatch, tmp_path, {
+        "me": ({"id": "998877665544"}, None, None),
+        "feed": ({"data": [{"id": "998877665544_1"}]}, None, None),
+    })
+    monkeypatch.setattr(rb.fbpub, "fetch_insights", lambda pid, t: ({"raw": {}}, None))
+    out = rb.run_preflight("dry_run")
+    assert out["exit_reason"] == "EXIT_OK"
+    assert out["checks"]["fb_token_kind"] == "page_token_match"
