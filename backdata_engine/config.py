@@ -62,6 +62,7 @@ BANNED_TERMS: tuple[str, ...] = (
 HOOK_BANNED_TERMS: tuple[str, ...] = (
     "담아", "담을", "매집", "줍줍", "주워", "기회", "타이밍", "전망", "들어가", "진입",
     "알림", "저장", "놓치", "지금 바로", "폭락", "폭등", "대폭",
+    "바닥", "저점", "고점", "지금이", "노려",
 )
 # 반응 유도(engagement bait) — Meta 강등 정책
 BAIT_TERMS: tuple[str, ...] = (

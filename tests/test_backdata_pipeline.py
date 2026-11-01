@@ -152,6 +152,7 @@ def test_one_index_fetch_failed_alerts_but_continues(env, monkeypatch):
     out = rb.run_post("dry_run", now)
     assert out["exit_reason"] == "EXIT_OK"
     assert out["warnings"] == ["fetch_failed=['^KQ11']"]
+    assert any(c[0] == "alert" and "fetch_failed" in c[1] for c in rec.calls)
 
 
 def test_fetch_failure_is_data_fail(env, monkeypatch):

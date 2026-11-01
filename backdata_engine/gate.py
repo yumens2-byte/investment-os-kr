@@ -103,5 +103,8 @@ def check_hook(hook: str, label_numbers: set[float], max_chars: int) -> tuple[bo
         return False, "GATE_BANNED"
     if re.search(r"[+\-−]\s*\d", h):
         return False, "GATE_NUMBER"
+    # 라벨 숫자를 기간 숫자로 재사용 금지 ("3% 이상 하락, 3일 뒤엔?") — 기간은 본문 템플릿만 쓴다
+    if re.search(r"\d+\s*(?:일\s*뒤|일\s*후|거래일)", h):
+        return False, "GATE_NUMBER"
     probe = f"{h}\n{DISCLAIMER}"
     return check_text(probe, label_numbers, "x")

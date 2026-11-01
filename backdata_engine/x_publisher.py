@@ -22,7 +22,8 @@ def is_unknown_exception(exc: Exception) -> bool:
     import requests  # noqa: PLC0415
     import tweepy  # noqa: PLC0415
 
-    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError,
+                        requests.exceptions.ChunkedEncodingError)):
         return True
     return isinstance(exc, tweepy.TwitterServerError)
 
@@ -37,7 +38,8 @@ def post_text(client: Any, text: str) -> tuple[str | None, str | None]:
     except Exception as exc:
         prefix = "UNKNOWN: " if is_unknown_exception(exc) else ""
         logger.error(f"[BXPub] 발행 실패 (재시도 안 함): {prefix}{type(exc).__name__}")
-        return None, f"{prefix}{type(exc).__name__}: {str(exc)[:300]}"
+        # spend cap 판정이 잘린 문자열 때문에 빗나가지 않도록 전체 문자열을 반환한다 (R6-02)
+        return None, f"{prefix}{type(exc).__name__}: {exc}"
     try:
         tweet_id = str(resp.data["id"])
     except Exception:

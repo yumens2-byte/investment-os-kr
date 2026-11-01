@@ -164,7 +164,9 @@ def run_post(mode: str, now_kst: datetime) -> dict:
     if mode == "dry_run":
         logger.info(f"[DRY_RUN] {chosen['condition_key']} n={chosen['n']} "
                     f"x_len={comp['x_weighted_len']} writeExecuted=false\n{comp['text_x']}")
-        return _finish(summary, "EXIT_OK", ok=True)
+        warn = summary.get("warnings")
+        return _finish(summary, "EXIT_OK", ok=True, notify=bool(warn),
+                       detail=f"warnings={warn}" if warn else "")
 
     # S6 pending 선기록
     record = {
@@ -228,7 +230,9 @@ def run_post(mode: str, now_kst: datetime) -> dict:
         return _finish(summary, "EXIT_RECORD_FAIL", ok=False, detail=f"id={post_id}")
     if len(posted) == 2:
         logger.info(f"[Backdata] 발행 완료 x={tweet_id} fb={fb_id}")
-        return _finish(summary, "EXIT_OK", ok=True)
+        warn = summary.get("warnings")
+        return _finish(summary, "EXIT_OK", ok=True, notify=bool(warn),
+                       detail=f"warnings={warn}" if warn else "")
     if results.get("x") == "spend_cap" and not posted:
         return _finish(summary, "EXIT_SPEND_CAP", ok=False)
     if posted:

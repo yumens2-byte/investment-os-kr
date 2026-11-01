@@ -115,6 +115,9 @@ def test_compose_llm_hook_used_and_free_only():
     "Buy the dip?",
     "반등 전망 나왔다",
     "알림 설정하고 지켜보세요",
+    # R6-02 제안
+    "코스피 5일 연속 하락, 지금이 바닥일까?",
+    "5일 연속 하락, 5일 뒤엔?",
 ])
 def test_compose_bad_llm_hook_falls_back(hook):
     out = composer.compose(STATS, _gemini(hook))

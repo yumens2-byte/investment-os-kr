@@ -37,6 +37,17 @@ def test_x_server_error_is_unknown():
     assert err.startswith("UNKNOWN:")
 
 
+def test_x_chunked_encoding_is_unknown():
+    exc = requests.exceptions.ChunkedEncodingError("connection broken")
+    assert x_publisher.post_text(_Client(exc=exc), "t")[1].startswith("UNKNOWN:")
+
+
+def test_x_error_text_not_truncated_for_spend_cap():
+    long_msg = "x" * 500 + " SpendCapReached"
+    err = x_publisher.post_text(_Client(exc=RuntimeError(long_msg)), "t")[1]
+    assert err.endswith("SpendCapReached")
+
+
 def test_x_client_error_is_failed_not_unknown():
     resp = requests.Response()
     resp.status_code = 403
