@@ -1,0 +1,117 @@
+name: Backdata Card
+
+# DN2026_0090 백데이터 반전 카드 (비정각 STD-SCHED-02, cron 문자열은 아래 job if와 같이 바꾼다 STD-SCHED-01)
+#   발행: "41 8 * * 1-5"   = KST 평일 17:41 (장 마감 15:30 이후)
+#   성과: "7 1,9,17 * * *" = KST 매일 10:07·18:07·02:07 (8시간 간격 → 24h·72h 체크포인트를 8h 이내 오차로 수집)
+# 인접 cron: following 매시 :23 / reply 1,4,9,13시 :17 UTC / collect 1,7,13,19시 :47 UTC / shock 06:55 UTC
+on:
+  schedule:
+    - cron: "41 8 * * 1-5"
+    - cron: "7 1,9,17 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "실행 모드 (dispatch 기본 dry_run)"
+        type: choice
+        options: [dry_run, shadow, live]
+        default: dry_run
+      step:
+        description: "단계"
+        type: choice
+        options: [post, metrics, preflight]
+        default: post
+
+# 발행과 성과 수집은 서로 다른 그룹 — 발행 지연(최대 40분) 중 수집 대기 run이 취소되지 않게 (R6-03 제안)
+concurrency:
+  group: backdata-card-${{ (github.event_name == 'workflow_dispatch' && inputs.step == 'metrics') || github.event.schedule == '7 1,9,17 * * *' }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt pytest
+      - name: 전수 테스트 (실패 시 파이프라인 차단)
+        run: python -m pytest -q tests/
+
+  metrics:
+    needs: test
+    if: (github.event_name == 'schedule' && github.event.schedule == '7 1,9,17 * * *') || (github.event_name == 'workflow_dispatch' && inputs.step == 'metrics')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: 성과 수집
+        env:
+          BACKDATA_ENABLED: ${{ vars.BACKDATA_ENABLED }}
+          BACKDATA_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || vars.BACKDATA_MODE || 'dry_run' }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          FACE_PAGE_TOKEN: ${{ secrets.FACE_PAGE_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: python run_backdata.py --step metrics
+      - name: 리포트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backdata-metrics-${{ github.run_id }}
+          path: |
+            logs/backdata_report_*.json
+            logs/backdata_*.log
+          retention-days: 14
+
+  post:
+    needs: test
+    if: (github.event_name == 'schedule' && github.event.schedule == '41 8 * * 1-5') || (github.event_name == 'workflow_dispatch' && inputs.step != 'metrics')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60        # 랜덤 지연 최대 40분(BACKDATA_DELAY_MAX_SEC 상한 2400) + 처리
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: 카드 발행
+        env:
+          STEP: ${{ github.event_name == 'workflow_dispatch' && inputs.step || 'post' }}
+          BACKDATA_ENABLED: ${{ vars.BACKDATA_ENABLED }}
+          BACKDATA_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || vars.BACKDATA_MODE || 'dry_run' }}
+          BACKDATA_DELAY_MAX_SEC: ${{ vars.BACKDATA_DELAY_MAX_SEC }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # Gemini 무료 키 3종만 주입 — 유료 키는 주입하지 않음 (비용 0, DN2026_0090)
+          GEMINI_API_KEY:         ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_SUB_KEY:     ${{ secrets.GEMINI_API_SUB_KEY }}
+          GEMINI_API_SUB_SUB_KEY: ${{ secrets.GEMINI_API_SUB_SUB_KEY }}
+          FACE_PAGE_ID: ${{ secrets.FACE_PAGE_ID }}
+          FACE_PAGE_TOKEN: ${{ secrets.FACE_PAGE_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: python run_backdata.py --step "$STEP"
+      - name: 리포트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backdata-post-${{ github.run_id }}
+          path: |
+            logs/backdata_report_*.json
+            logs/backdata_*.log
+          retention-days: 14
