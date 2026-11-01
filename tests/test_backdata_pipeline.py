@@ -247,3 +247,19 @@ def test_metrics_x_credentials_missing_still_collects_fb(monkeypatch, tmp_path):
     out = rb.run_metrics("live", now)
     assert [r["channel"] for r in rows] == ["fb"]
     assert {"channel": "x", "error": "NO_CREDENTIALS"} in out["errors"]
+
+
+def test_metrics_all_null_does_not_consume_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    now = datetime(2026, 11, 10, tzinfo=UTC)
+    ts = (now - timedelta(hours=30)).isoformat()
+    monkeypatch.setattr(rb.store, "list_metric_targets", lambda n, d: [
+        {"id": 7, "x_post_id": None, "x_posted_at": None, "fb_post_id": "p_222",
+         "fb_posted_at": ts, "collected": set()}])
+    rows = []
+    monkeypatch.setattr(rb.store, "insert_metric", lambda r: rows.append(r) or True)
+    monkeypatch.setattr(rb.fbpub, "fetch_insights", lambda pid, tok: (
+        {"impressions": None, "engagements": None, "raw": {}}, None))
+    monkeypatch.setenv("FACE_PAGE_TOKEN", "tok")
+    out = rb.run_metrics("live", now)
+    assert rows == [] and out["collected"] == 0

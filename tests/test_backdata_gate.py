@@ -118,6 +118,10 @@ def test_compose_llm_hook_used_and_free_only():
     # R6-02 제안
     "코스피 5일 연속 하락, 지금이 바닥일까?",
     "5일 연속 하락, 5일 뒤엔?",
+    # R6-03 경고: 지수·방향 불일치
+    "코스닥 5일 연속 상승, 다음은?",
+    "코스피 5일 연속 하락, 코스닥은?",
+    "5일 연속 하락, 과거엔 어땠을까?",
 ])
 def test_compose_bad_llm_hook_falls_back(hook):
     out = composer.compose(STATS, _gemini(hook))

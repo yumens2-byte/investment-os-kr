@@ -21,8 +21,9 @@ on:
         options: [post, metrics, preflight]
         default: post
 
+# 발행과 성과 수집은 서로 다른 그룹 — 발행 지연(최대 40분) 중 수집 대기 run이 취소되지 않게 (R6-03 제안)
 concurrency:
-  group: backdata-card
+  group: backdata-card-${{ (github.event_name == 'workflow_dispatch' && inputs.step == 'metrics') || github.event.schedule == '7 1,9,17 * * *' }}
   cancel-in-progress: false
 
 jobs:

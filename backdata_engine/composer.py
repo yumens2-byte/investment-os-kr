@@ -11,7 +11,13 @@ import hashlib
 import logging
 
 from backdata_engine import gate
-from backdata_engine.config import DATA_SOURCE_LABEL, DISCLAIMER, HOOK_MAX_CHARS, HORIZONS
+from backdata_engine.config import (
+    DATA_SOURCE_LABEL,
+    DISCLAIMER,
+    HOOK_MAX_CHARS,
+    HORIZONS,
+    INDEXES,
+)
 
 VERSION = "0.1.0"
 
@@ -96,6 +102,7 @@ def llm_hook(stats: dict, gemini_call) -> tuple[str | None, dict]:
     """(훅 | None, 호출 메타). gemini_call은 core.gemini_gateway.call 호환."""
     prompt = (
         f"조건: {stats['index_name']} {stats['condition_label']} (오늘 종가 기준)\n"
+        f"첫 줄에는 '{stats['index_name']}'와 '{stats['condition_label']}'를 글자 그대로 넣어라.\n"
         "과거 같은 조건 이후의 통계를 보여주는 게시물의 첫 줄을 써라."
     )
     result = gemini_call(
@@ -156,6 +163,11 @@ def compose(stats: dict, gemini_call) -> dict:
     candidates: list[tuple[str, str]] = []
     if hook:
         ok, reason = gate.check_hook(hook, nums["label_numbers"], HOOK_MAX_CHARS)
+        if ok:
+            ok, reason = gate.check_hook_matches(
+                hook, stats["index_name"], stats["condition_label"],
+                [name for _, name in INDEXES],
+            )
         if ok:
             candidates.append(("llm", hook))
         else:

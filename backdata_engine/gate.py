@@ -108,3 +108,17 @@ def check_hook(hook: str, label_numbers: set[float], max_chars: int) -> tuple[bo
         return False, "GATE_NUMBER"
     probe = f"{h}\n{DISCLAIMER}"
     return check_text(probe, label_numbers, "x")
+
+
+def check_hook_matches(hook: str, index_name: str, label: str,
+                       other_index_names: list[str]) -> tuple[bool, str | None]:
+    """
+    훅이 선택된 조건과 같은 사실을 말하는지 (R6-03 경고: 지수·방향 불일치 차단).
+    지수명과 조건 라벨(방향·신고가/신저가 포함)을 그대로 포함해야 하고, 다른 지수명은 금지.
+    """
+    h = (hook or "").strip()
+    if index_name not in h or label not in h:
+        return False, "GATE_MISMATCH"
+    if any(name in h for name in other_index_names if name != index_name):
+        return False, "GATE_MISMATCH"
+    return True, None

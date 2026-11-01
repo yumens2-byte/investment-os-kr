@@ -288,7 +288,8 @@ def run_metrics(mode: str, now_utc: datetime) -> dict:
             summary["calls"]["fb_read"] += 1
             if err:
                 summary["errors"].append({"channel": "fb", "error": err[:200]})
-        if not m:
+        if not m or (m.get("impressions") is None and m.get("engagements") is None):
+            # 지표가 비어 있으면 체크포인트를 소진하지 않고 다음 실행에서 재수집 (R6-03)
             continue
         ok = store.insert_metric({
             "post_id": p["id"], "channel": ch, "checkpoint": cp, "elapsed_hours": hours,

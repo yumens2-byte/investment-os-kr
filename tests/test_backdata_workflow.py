@@ -41,4 +41,4 @@ def test_inputs_pass_through_env():
 def test_python_311_and_concurrency():
     text = _text()
     assert text.count('python-version: "3.11"') == 3
-    assert "group: backdata-card" in text and "cancel-in-progress: false" in text
+    assert "group: backdata-card-${{" in text and "cancel-in-progress: false" in text
