@@ -41,7 +41,7 @@ from backdata_engine.config import (
 from core import gemini_gateway
 from reply_engine import x_client
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 
 logger = logging.getLogger(__name__)
 
@@ -362,13 +362,18 @@ def run_preflight(mode: str) -> dict:
         checks.update(_fb_token_kind(page_id, token))
         feed, err, _ = fbpub.fbclient.graph_get(f"{page_id}/feed", token,
                                                 {"limit": 1, "fields": "id"})
-        checks["fb_feed_read"] = "ok" if not err else fbpub.fbclient.format_error(err)
+        # feed 목록 읽기는 파이프라인이 쓰지 않는다(발행 POST /feed·인사이트만 사용).
+        # 목록 읽기에는 pages_read_user_content가 추가로 필요하므로 참고 정보로만 둔다 (v0.1.4).
+        checks["fb_feed_read_info"] = "ok" if not err else (
+            "not_granted (pages_read_user_content 필요 — 발행에는 불필요): "
+            + fbpub.fbclient.format_error(err))
         latest = ((feed or {}).get("data") or [{}])[0].get("id")
         if latest:
             _ins, ierr = fbpub.fetch_insights(latest, token)
             checks["fb_insights_read"] = "ok" if not ierr else ierr
         else:
-            checks["fb_insights_read"] = "no_post" if not err else "skipped (feed 읽기 실패)"
+            checks["fb_insights_read"] = "no_post" if not err else (
+                "unverified (게시물 ID 확보 불가 — 첫 live 성과 수집에서 확인, read_insights 필요)")
         checks["fb_publish_permission"] = (
             "unverified (쓰기 없이 확인 불가 — 첫 live 또는 토큰 디버거)"
         )
@@ -378,7 +383,7 @@ def run_preflight(mode: str) -> dict:
     checks["x_get_me"] = "ok" if client and _x_account_ok(client) else "failed"
     for key, value in list(checks.items()):
         checks[key] = notify.scrub(value, page_id, token)
-    informational = {"fb_token_permissions"}
+    informational = {"fb_token_permissions", "fb_feed_read_info"}
     failed = [k for k, v in checks.items()
               if k not in informational and v not in ("ok", "no_post", "page_token_match")
               and not str(v).startswith(("unverified", "skipped"))]
