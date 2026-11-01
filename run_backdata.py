@@ -41,7 +41,7 @@ from backdata_engine.config import (
 from core import gemini_gateway
 from reply_engine import x_client
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 
 logger = logging.getLogger(__name__)
 
@@ -315,6 +315,30 @@ def run_metrics(mode: str, now_utc: datetime) -> dict:
 
 
 # ── preflight ────────────────────────────────────────────────────────
+def _fb_token_kind(page_id: str, token: str) -> dict:
+    """
+    토큰 종류 진단 (v0.1.3, 읽기 전용).
+    페이지 식별 GET /{page}는 공개 정보라 어떤 토큰으로도 성공하므로,
+    토큰이 '이 페이지의 페이지 토큰'인지는 GET /me로 따로 본다.
+      page_token_match   — /me id == FACE_PAGE_ID (정상)
+      user_token         — /me/permissions가 응답 → 사용자 토큰 (권한 목록 함께 기록)
+      other_page_token   — 그 밖 (다른 페이지의 토큰 등)
+    ID 값은 기록하지 않는다.
+    """
+    me, err, _ = fbpub.fbclient.graph_get("me", token, {"fields": "id"})
+    if err:
+        return {"fb_token_kind": f"error: {fbpub.fbclient.format_error(err)}"}
+    if str((me or {}).get("id") or "") == page_id:
+        return {"fb_token_kind": "page_token_match"}
+    perms, perr, _ = fbpub.fbclient.graph_get("me/permissions", token, {})
+    if not perr and isinstance((perms or {}).get("data"), list):
+        granted = sorted(p.get("permission") for p in perms["data"]
+                         if p.get("status") == "granted" and p.get("permission"))
+        return {"fb_token_kind": "user_token (페이지 토큰 아님)",
+                "fb_token_permissions": ",".join(granted)}
+    return {"fb_token_kind": "other_page_token (FACE_PAGE_ID와 다른 대상)"}
+
+
 def _x_account_ok(client) -> bool:
     """X 계정 확인. x_client.fetch_my_user_id는 user_id를 로그에 남기므로 쓰지 않는다 (v0.1.2)."""
     try:
@@ -335,14 +359,16 @@ def run_preflight(mode: str) -> dict:
         identity, err = fbpub.fbclient.fetch_page_identity(page_id, token)
         checks["fb_page_identity"] = "ok" if identity and not err else (
             fbpub.fbclient.format_error(err) if err else "empty")
+        checks.update(_fb_token_kind(page_id, token))
         feed, err, _ = fbpub.fbclient.graph_get(f"{page_id}/feed", token,
                                                 {"limit": 1, "fields": "id"})
+        checks["fb_feed_read"] = "ok" if not err else fbpub.fbclient.format_error(err)
         latest = ((feed or {}).get("data") or [{}])[0].get("id")
         if latest:
             _ins, ierr = fbpub.fetch_insights(latest, token)
             checks["fb_insights_read"] = "ok" if not ierr else ierr
         else:
-            checks["fb_insights_read"] = "no_post" if not err else fbpub.fbclient.format_error(err)
+            checks["fb_insights_read"] = "no_post" if not err else "skipped (feed 읽기 실패)"
         checks["fb_publish_permission"] = (
             "unverified (쓰기 없이 확인 불가 — 첫 live 또는 토큰 디버거)"
         )
@@ -352,8 +378,10 @@ def run_preflight(mode: str) -> dict:
     checks["x_get_me"] = "ok" if client and _x_account_ok(client) else "failed"
     for key, value in list(checks.items()):
         checks[key] = notify.scrub(value, page_id, token)
+    informational = {"fb_token_permissions"}
     failed = [k for k, v in checks.items()
-              if v not in ("ok", "no_post") and not str(v).startswith("unverified")]
+              if k not in informational and v not in ("ok", "no_post", "page_token_match")
+              and not str(v).startswith(("unverified", "skipped"))]
     summary["failed"] = failed
     detail = "; ".join(f"{k}={str(checks[k])[:160]}" for k in failed)
     return _finish(summary, "EXIT_PREFLIGHT_FAIL" if failed else "EXIT_OK", ok=not failed,
