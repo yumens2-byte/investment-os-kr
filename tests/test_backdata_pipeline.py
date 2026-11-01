@@ -263,3 +263,34 @@ def test_metrics_all_null_does_not_consume_checkpoint(monkeypatch, tmp_path):
     monkeypatch.setenv("FACE_PAGE_TOKEN", "tok")
     out = rb.run_metrics("live", now)
     assert rows == [] and out["collected"] == 0
+
+
+def test_finish_logs_summary_line(env, caplog):
+    _, now, _ = env
+    with caplog.at_level("INFO"):
+        rb.run_post("dry_run", now)
+    line = [r.message for r in caplog.records if "[Backdata] 종료" in r.message]
+    assert line and "EXIT_OK" in line[0] and "condition_key" in line[0]
+
+
+def test_preflight_logs_failed_checks_with_masked_token(monkeypatch, tmp_path, caplog):
+    monkeypatch.chdir(tmp_path)
+    token = "EAAB_SECRET_TOKEN_123"
+    monkeypatch.setenv("FACE_PAGE_ID", "page")
+    monkeypatch.setenv("FACE_PAGE_TOKEN", token)
+    sent = []
+    monkeypatch.setattr(rb.notify, "send", lambda t: sent.append(t) or True)
+    monkeypatch.setattr(rb.fbpub.fbclient, "fetch_page_identity",
+                        lambda p, t: ({"id": "page"}, None))
+    monkeypatch.setattr(rb.fbpub.fbclient, "graph_get",
+                        lambda path, t, params: ({"data": [{"id": "p_1"}]}, None, None))
+    monkeypatch.setattr(rb.fbpub, "fetch_insights",
+                        lambda pid, t: (None, "graph_error code=100 message=invalid metric"))
+    monkeypatch.setattr(rb.x_client, "get_x_client", lambda: object())
+    monkeypatch.setattr(rb.x_client, "fetch_my_user_id", lambda c: "1")
+    with caplog.at_level("INFO"):
+        out = rb.run_preflight("dry_run")
+    assert out["exit_reason"] == "EXIT_PREFLIGHT_FAIL" and out["failed"] == ["fb_insights_read"]
+    assert any("invalid metric" in r.message for r in caplog.records)
+    assert sent and "fb_insights_read=graph_error code=100" in sent[0]
+    assert token not in caplog.text and all(token not in s for s in sent)
