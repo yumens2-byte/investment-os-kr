@@ -41,7 +41,7 @@ from backdata_engine.config import (
 from core import gemini_gateway
 from reply_engine import x_client
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,15 @@ def _finish(summary: dict, reason: str, *, ok: bool, notify: bool = False,
     summary["exit_reason"] = reason
     summary["success"] = ok
     summary["finished_at"] = datetime.now(UTC).isoformat()
+    # artifact를 못 받아도 원인을 볼 수 있게 결과 요약을 로그 1줄로 (v0.1.1, STD-OBS-03)
+    brief = {k: summary[k] for k in ("calls", "checks", "results", "warnings") if summary.get(k)}
+    if summary.get("chosen"):
+        brief["chosen"] = {k: summary["chosen"].get(k) for k in ("index", "condition_key", "n")}
+    if summary.get("compose"):
+        brief["compose"] = {k: summary["compose"].get(k)
+                            for k in ("ok", "reason", "hook_source", "x_weighted_len")}
+    logger.info(f"[Backdata] 종료 | step={summary.get('step')} | {reason} | "
+                f"{json.dumps(brief, ensure_ascii=False, default=str)}")
     if notify or reason in FAIL_EXITS:
         _alert(summary, detail)
     _write_report(summary)
@@ -333,7 +342,9 @@ def run_preflight(mode: str) -> dict:
     failed = [k for k, v in checks.items()
               if v not in ("ok", "no_post") and not str(v).startswith("unverified")]
     summary["failed"] = failed
-    return _finish(summary, "EXIT_PREFLIGHT_FAIL" if failed else "EXIT_OK", ok=not failed)
+    detail = "; ".join(f"{k}={str(checks[k])[:160]}" for k in failed)
+    return _finish(summary, "EXIT_PREFLIGHT_FAIL" if failed else "EXIT_OK", ok=not failed,
+                   detail=detail)
 
 
 def main(argv: list[str] | None = None) -> dict:
