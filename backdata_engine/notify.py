@@ -21,6 +21,21 @@ _TIMEOUT_SEC = 8
 _post = requests.post  # 테스트 교체 지점
 
 
+def mask_id(value: object) -> str:
+    """식별자 마스킹: '***' + 끝 4자리 (public 레포 Actions 로그 노출 방지, 회장 지시 11-02)."""
+    text = str(value or "")
+    return "***" if len(text) <= 4 else f"***{text[-4:]}"
+
+
+def scrub(text: str, *secrets: str) -> str:
+    """문자열에서 주어진 값(페이지 ID·토큰 등)을 '***'로 치환."""
+    out = str(text or "")
+    for s in secrets:
+        if s and len(s) >= 4:
+            out = out.replace(s, "***")
+    return out
+
+
 def send(text: str) -> bool:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_ALERT_CHAT_ID", "").strip()

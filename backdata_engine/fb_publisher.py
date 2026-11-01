@@ -14,10 +14,11 @@ from __future__ import annotations
 import logging
 
 from backdata_engine.config import FB_INSIGHT_METRICS
+from backdata_engine.notify import mask_id, scrub
 from reply_engine.facebook import client as fbclient
 from reply_engine.facebook import config as fbc
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,13 @@ def post_feed(page_id: str, token: str, message: str) -> tuple[str | None, str |
         # 코드 없음(전송 오류·타임아웃·비JSON)·일시 오류(1/2)는 결과 불명 (R6-02)
         if fbclient.classify_error(error) == "UNKNOWN":
             text = f"UNKNOWN: {text}"
+        text = scrub(text, page_id)
         logger.error(f"[BFBPub] 발행 실패 (재시도 안 함): {text}")
         return None, text
     post_id = str((payload or {}).get("id") or "")
     if not post_id:
         return None, "UNKNOWN: success response without id"
-    logger.info(f"[BFBPub] 발행 성공: {post_id}")
+    logger.info(f"[BFBPub] 발행 성공: {mask_id(post_id)}")
     return post_id, None
 
 

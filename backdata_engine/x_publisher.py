@@ -10,7 +10,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-VERSION = "0.1.0"
+from backdata_engine.notify import mask_id
+
+VERSION = "0.1.1"
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,7 @@ def post_text(client: Any, text: str) -> tuple[str | None, str | None]:
         tweet_id = str(resp.data["id"])
     except Exception:
         return None, "UNKNOWN: success response without id"
-    logger.info(f"[BXPub] 발행 성공: {tweet_id}")
+    logger.info(f"[BXPub] 발행 성공: {mask_id(tweet_id)}")
     return tweet_id, None
 
 
