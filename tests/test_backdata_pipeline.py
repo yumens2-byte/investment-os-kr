@@ -367,9 +367,9 @@ def test_preflight_detects_user_token(monkeypatch, tmp_path, caplog):
     c = out["checks"]
     assert c["fb_token_kind"].startswith("user_token")
     assert c["fb_token_permissions"] == "pages_manage_posts,pages_read_engagement"
-    assert c["fb_feed_read"].startswith("graph_error code=10")
-    assert c["fb_insights_read"].startswith("skipped")
-    assert set(out["failed"]) == {"fb_token_kind", "fb_feed_read"}
+    assert c["fb_feed_read_info"].startswith("not_granted")
+    assert c["fb_insights_read"].startswith("unverified")
+    assert set(out["failed"]) == {"fb_token_kind"}
     assert "1111222233334444" not in caplog.text and "998877665544" not in caplog.text
 
 
@@ -382,3 +382,16 @@ def test_preflight_page_token_match_passes(monkeypatch, tmp_path):
     out = rb.run_preflight("dry_run")
     assert out["exit_reason"] == "EXIT_OK"
     assert out["checks"]["fb_token_kind"] == "page_token_match"
+
+
+
+def test_preflight_page_token_without_feed_read_passes(monkeypatch, tmp_path):
+    feed_err = {"code": 10, "message": "requires pages_read_engagement"}
+    _preflight_env(monkeypatch, tmp_path, {
+        "me": ({"id": "998877665544"}, None, None),
+        "feed": (None, feed_err, None),
+    })
+    out = rb.run_preflight("dry_run")
+    assert out["exit_reason"] == "EXIT_OK", out["failed"]
+    assert out["checks"]["fb_token_kind"] == "page_token_match"
+    assert out["checks"]["fb_feed_read_info"].startswith("not_granted")
