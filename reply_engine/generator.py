@@ -253,6 +253,11 @@ def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
         "매번 같은 이모지 금지. "
         "'댓글 잘 봤어요', '관심 가져주셔서 감사해요'처럼 어느 댓글에나 붙는 상투 문구를 피하고 "
         "이 댓글에만 어울리는 표현을 쓴다. 모든 답글을 감사나 화이팅으로 끝내지 않는다.\n"
+        + ("짧은 관찰 댓글도 구체적인 지표·대상을 '시장 분위기', '그 부분'으로 뭉개지 않는다. "
+        "댓글에 직접 나온 소재 하나를 유지하되 수치·원인·전망을 새로 추가하지 않는다. "
+        "예: '시장폭 플러스가 눈에 들어오네요'에는 '시장폭 쪽을 짚어주셨네요'처럼 "
+        "관찰 대상을 받아주며, 상대 심리를 '~시나 봐요'로 추측하지 않는다.\n"
+           if any(i.get("_preserve_subject") for i in ai_items) else "")
         + ("recent_response_texts는 최근 발행 문구다. 그 표현과 겹치지 않게 쓴다.\n"
            if any("_recent_texts" in i for i in ai_items) else "")
         + f"{prompt_items}\n"

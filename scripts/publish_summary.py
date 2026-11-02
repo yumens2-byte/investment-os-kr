@@ -15,6 +15,7 @@ import io
 import json
 import os
 import subprocess
+import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,17 @@ from pathlib import Path
 REPO = "yumens2-byte/investment-os-kr"
 OUT_DIR = Path("docs/reply_summary")
 MAX_SKIP_ROWS = 12
+
+
+class ArtifactRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Signed artifact storage URLs authenticate via their query, not GH_TOKEN."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            # Never forward the repository credential to artifact storage.
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 def sh(*cmd: str, check: bool = True) -> str:
@@ -33,7 +45,6 @@ def sh(*cmd: str, check: bool = True) -> str:
 
 def artifact_zip_bytes(run_id: str, token: str) -> bytes:
     """run의 artifact 목록에서 reply-report-* 를 찾아 zip 바이트를 내려받는다."""
-    import urllib.request
     hdr = {"Authorization": f"Bearer {token}",
            "Accept": "application/vnd.github+json"}
     req = urllib.request.Request(
@@ -41,11 +52,13 @@ def artifact_zip_bytes(run_id: str, token: str) -> bytes:
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.load(r)
     art = next((a for a in data.get("artifacts", [])
-                if str(a.get("name", "")).startswith("reply-report-")), None)
+                if a.get("name") == f"reply-report-{run_id}"
+                and not a.get("expired", False)), None)
     if art is None:
         raise FileNotFoundError("reply-report artifact 없음")
     req = urllib.request.Request(art["archive_download_url"], headers=hdr)
-    with urllib.request.urlopen(req, timeout=60) as r:
+    opener = urllib.request.build_opener(ArtifactRedirectHandler())
+    with opener.open(req, timeout=60) as r:
         return r.read()
 
 
@@ -84,8 +97,9 @@ def build_markdown(run_id: str, conclusion: str, event: str,
         f"- 결론: {conclusion} · 트리거: {event} · exit_reason: {s.get('exit_reason', '-')}",
         f"- 모드: {mode} · 실행 코드: {s.get('commit_sha', '미확인')}",
         f"- **실제 발행: {actual} / 모의: {simulated} / 발행 결과 불명: {unknown}**",
-        f"- 초안: {s.get('candidates', 0)} / 분류 통과: {s.get('classified_pass', 0)}",
-        f"- 수집 포화: {s.get('collection_saturated', False)} "
+        f"- 루트 검증 통과 후보: {count(s.get('candidates'))} "
+        f"/ 분류 통과: {count(s.get('classified_pass'))}",
+        f"- 수집 포화: {s.get('collection_saturated', '미확인')} "
         f"· oldest_id: {s.get('oldest_id', '-')}",
         "",
         "## skip 사유 분포",
