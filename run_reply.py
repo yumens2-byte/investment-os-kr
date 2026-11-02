@@ -621,7 +621,8 @@ def main() -> dict:
         if not window:
             return
         batch = generator.generate_batch([
-            {**item, "_recent_texts": recent_texts[-10:], "_account_user_id": my_user_id}
+            {**item, "_recent_texts": recent_texts[-10:], "_account_user_id": my_user_id,
+             "_preserve_subject": True}
             for item in window
         ])
         replies.update(batch)
@@ -637,7 +638,9 @@ def main() -> dict:
                 reply_candidates.pop(item["id"], None)
 
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
-    recent_texts = store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)
+    # DB returns newest first; keep chronological order so [-10:] and append()
+    # consistently supply the latest replies to subsequent generation windows.
+    recent_texts = list(reversed(store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)))
     responded_today = store.count_responded_today()
     published_this_run = 0
     publish_attempts_this_run = 0
