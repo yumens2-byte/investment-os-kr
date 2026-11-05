@@ -181,3 +181,28 @@ def test_collector_fails_closed_when_settled_budget_not_saved(monkeypatch):
 
     assert report["exit_reason"] == "BUDGET_SAVE_FAILED"
     assert persisted == [] and cursors == []
+
+
+def test_mention_pages_not_limited_by_resource_reservation(monkeypatch):
+    """회귀(2026-11-06 dry_run 실측): 일 예산 1,000원·리소스 모드에서도 멘션 페이지 상한 3 유지."""
+    _base_env(monkeypatch, "dry_run")
+    _quiet(monkeypatch)
+    _cost_env(monkeypatch)
+    monkeypatch.setenv("DAILY_BUDGET_KRW", "1000")
+    monkeypatch.setenv("X_MY_USER_ID", "111")
+    mem = _MemStore()
+    mem.install(monkeypatch)
+    _install_x(monkeypatch, [])
+    seen = {}
+
+    def fake_fetch(_client, _uid, _since, max_pages=None):
+        seen["max_pages"] = max_pages
+        return {"success": True, "tweets": [], "users": {}, "newest_id": None,
+                "pages_fetched": 1, "saturated": False, "collection_complete": True}
+
+    monkeypatch.setattr(run_reply.x_client, "fetch_mentions", fake_fetch)
+    monkeypatch.setattr(run_reply, "_DEFAULT_FETCH_MENTIONS", fake_fetch)
+
+    run_reply.main()
+
+    assert seen["max_pages"] == run_reply.MENTIONS_MAX_PAGES

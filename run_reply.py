@@ -67,7 +67,6 @@ from reply_engine import classifier, gate, generator, lang, store, telemetry, x_
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     MENTIONS_MAX_PAGES,
-    MENTIONS_MAX_RESULTS,
     PUBLISH_JITTER_MAX_SEC,
     PUBLISH_JITTER_MIN_SEC,
     PUBLISH_START_DELAY_MAX_SEC,
@@ -290,14 +289,11 @@ def main() -> dict:
     # 대화 루트 소유자 검증 1콜을 남겨 수집만 성공하고 전건 미검증 스킵되는 상황을 막는다.
     # 테스트/통합 코드가 레거시 3-인자 함수를 교체한 경우에는 기존 규약을 보존한다.
     if x_client.fetch_mentions is _DEFAULT_FETCH_MENTIONS:
-        # DN2026_0100: 리소스 모드면 페이지당 최악 비용(max_results × 3리소스 × 단가)으로 예약
-        _page_reserve = (
-            MENTIONS_MAX_RESULTS * 3 * float(guard.read_resource_cost)
-            if guard.resource_mode else None
-        )
-        available_reads = guard.available_read_calls(
-            MENTIONS_MAX_PAGES + 1, reserve_krw=_page_reserve
-        )
+        # DN2026_0100: 페이지 수 산정은 호출 단가(X_READ_COST_KRW) 예약을 유지한다.
+        # 최악 리소스 비용(max_results × 3 × 단가)으로 예약하면 일 예산 1,000원에서 항상
+        # 1페이지로 제한되어 next_token이 남는 실행마다 수집 미완료(cursor 미전진)가 된다
+        # (2026-11-06 dry_run run 42110390399 실측). 실제 비용은 반환 리소스로 사후 계상한다.
+        available_reads = guard.available_read_calls(MENTIONS_MAX_PAGES + 1)
         fetch_pages = max(1, min(MENTIONS_MAX_PAGES, available_reads - 1))
         fetched = x_client.fetch_mentions(client, my_user_id, since_id, max_pages=fetch_pages)
     else:
