@@ -8,6 +8,11 @@
       4) git add/commit/push (변경 없으면 스킵)
 안전: 커밋 대상은 요약 MD 뿐 — 로그 원문·댓글 텍스트는 절대 커밋하지 않는다(격리 원칙).
 실패 정책: artifact 부재·파싱 실패 시 이유를 남기고 정상 종료한다.
+DN2026_0099 (2026-11-06): reply_engine.yml이 10분 틱 + gate job으로 바뀌어 SKIP 틱도 완료 이벤트를
+  발생시킨다. RUN_CONCLUSION이 success이고 artifact가 없고
+  jobs API에서 'Reply Pipeline' job이 skipped이거나 없으면
+  md 생성·커밋 없이 "gate skip" 로그만 남기고 정상 종료한다.
+  jobs 조회 실패 시에는 기존 동작(부분 실패 md 기록)을 유지한다 (기록 누락보다 보수).
 """
 from __future__ import annotations
 
@@ -23,6 +28,11 @@ from pathlib import Path
 REPO = "yumens2-byte/investment-os-kr"
 OUT_DIR = Path("docs/reply_summary")
 MAX_SKIP_ROWS = 12
+REPLY_JOB_NAME = "Reply Pipeline"   # DN2026_0099: reply_engine.yml jobs.reply.name
+
+
+class ArtifactMissing(FileNotFoundError):
+    """reply-report-<run_id> artifact가 run에 없음 (DN2026_0099 gate skip 판별용)."""
 
 
 class ArtifactRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -55,11 +65,27 @@ def artifact_zip_bytes(run_id: str, token: str) -> bytes:
                 if a.get("name") == f"reply-report-{run_id}"
                 and not a.get("expired", False)), None)
     if art is None:
-        raise FileNotFoundError("reply-report artifact 없음")
+        raise ArtifactMissing("reply-report artifact 없음")
     req = urllib.request.Request(art["archive_download_url"], headers=hdr)
     opener = urllib.request.build_opener(ArtifactRedirectHandler())
     with opener.open(req, timeout=60) as r:
         return r.read()
+
+
+def reply_job_skipped(run_id: str, token: str) -> bool:
+    """DN2026_0099: 'Reply Pipeline' job이 skipped이거나 없으면 True. 조회 실패는 예외 전파."""
+    hdr = {"Authorization": f"Bearer {token}",
+           "Accept": "application/vnd.github+json"}
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
+        headers=hdr)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.load(r)
+    jobs = data.get("jobs")
+    if not isinstance(jobs, list):
+        raise ValueError("jobs 응답 형식 이상")
+    job = next((j for j in jobs if j.get("name") == REPLY_JOB_NAME), None)
+    return job is None or job.get("conclusion") == "skipped"
 
 
 def parse_summary(zbytes: bytes) -> dict:
@@ -132,6 +158,18 @@ def main() -> None:
         if not run_id or not token:
             raise RuntimeError("RUN_ID 또는 GH_TOKEN 미설정")
         summary = parse_summary(artifact_zip_bytes(run_id, token))
+    except ArtifactMissing as e:               # DN2026_0099: gate skip 런이면 기록하지 않음
+        skipped = False
+        # 성공 런만 생략 대상. test·gate 실패 런은 기존대로 부분 실패 md를 남긴다.
+        if conclusion == "success":
+            try:
+                skipped = reply_job_skipped(run_id, token)
+            except Exception as je:            # jobs 조회 실패 → 기존 동작 유지
+                print(f"jobs 조회 실패 — 기존 동작 유지: {type(je).__name__}")
+        if skipped:
+            print(f"GATE_SKIP: run {run_id} — '{REPLY_JOB_NAME}' 미실행, 요약 생략")
+            return
+        summary, note = {}, f"요약 생성 부분 실패: {type(e).__name__}: {e}"
     except Exception as e:                     # fail-open — 워크플로 실패로 만들지 않음
         summary, note = {}, f"요약 생성 부분 실패: {type(e).__name__}: {e}"
 

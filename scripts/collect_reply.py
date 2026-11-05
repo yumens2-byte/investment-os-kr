@@ -54,6 +54,12 @@ def main() -> dict:
         if not store.upsert_budget(guard.row):
             raise RuntimeError("BUDGET_SAVE_FAILED")
         fetched = x_client.fetch_mentions(client, user_id, cursor.get("since_id"), max_pages=1)
+        # DN2026_0100: 예약한 1콜을 실제 반환 리소스(멘션 1건 = 본문·부모·작성자 최대 3)로 정산.
+        guard.settle_read(3 * len(fetched.get("tweets") or []))
+        if guard.resource_mode and not store.upsert_budget(guard.row):
+            # 정산값이 예약값보다 클 수 있으므로 저장 실패 시 이후 처리를 중단한다(fail-closed).
+            # 커서를 전진시키지 않으므로 다음 실행이 같은 구간을 다시 수집한다.
+            raise RuntimeError("BUDGET_SAVE_FAILED")
         if not fetched.get("success"):
             raise RuntimeError("FETCH_FAILED")
         report["collected"] = len(fetched["tweets"])

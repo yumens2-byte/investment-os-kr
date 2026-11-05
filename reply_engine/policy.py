@@ -1,4 +1,8 @@
-"""Reply decisions, bounded recovery metadata and intent-specific safe responses."""
+"""Reply decisions, bounded recovery metadata and intent-specific safe responses.
+
+v2.3.0 (2026-11-06, DN2026_0098): 선택 표지 A~D·1~4번·위/아래·한 표 인식, CHOICE를 WORRY보다
+  먼저 판정, 재시도 저장 초안 유지 판정(retry_keeps_stored_text), metadata에 generator_version.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from reply_engine.config import (
     REPLY_MAX_LENGTH_LONG,
 )
 
-POLICY_VERSION = "2.2.0"
+POLICY_VERSION = "2.3.0"  # DN2026_0098
 DEFER_REASONS = frozenset(
     {
         "RECEIVED",
@@ -125,20 +129,55 @@ _GREETING_PATTERN = re.compile(
     r"|(?:식사|저녁|점심|아침)\s*(?:\S+\s*){0,2}(?:드세|챙기세|하세)"
     r"|맛저|맛점|굿나잇|좋은\s*꿈|푹\s*쉬세|편히\s*쉬세"
 )
-_CHOICE_LETTER = re.compile(r"(?<![A-Za-z])[ABab](?![A-Za-z])")
-_CHOICE_WORDS = re.compile(
+# 기준(5c5246d) 정규식 — extended=False(FB 등) 경로에서 그대로 사용.
+_CHOICE_LETTER_BASE = re.compile(r"(?<![A-Za-z])[ABab](?![A-Za-z])")
+_CHOICE_WORDS_BASE = re.compile(
     r"선택|고르|골라|고를|할래|갈래|픽|[ABab]\s*(?:요|로|를|가|!|입니다|이요|쪽)"
 )
+# DN2026_0098 A3: A~D 확장 (기존 A/B만 → "C로 골라볼게요" 미인식 실측). extended=True(X) 전용.
+_CHOICE_LETTER = re.compile(r"(?<![A-Za-z])[A-Da-d](?![A-Za-z])")
+_CHOICE_WORDS = re.compile(
+    r"선택|고르|골라|고를|할래|갈래|픽|한\s*표"
+    r"|(?<![A-Za-z])[A-Da-d]\s*(?:요|로|를|가|!|입니다|이요|쪽|번)"
+)
+# DN2026_0098 A3: 번호(1~4번)·위/아래(쪽)·'한 표'는 단독으로도 선택 표지다.
+# '위로'(위안)·'위험'·'2번이나'(횟수) 오인을 피하려고 뒤따르는 형태를 한정한다.
+_CHOICE_NUMBER = re.compile(
+    r"(?<!\d)([1-4])\s*번(?=\s*(?:요|이요|으로|!|선택|골|고르|고를|할래|갈래|한\s*표|입니다|"
+    r"이에요|이(?!나|라도)|을|쪽|$))"
+)
+_CHOICE_POSITION = re.compile(r"(위|아래)\s*(?=쪽|꺼|거요|것|한\s*표|에\s*한\s*표)")
+_CHOICE_VOTE = re.compile(r"한\s*표")
 
 
-def is_choice_comment(text: str, parent_text: str = "") -> bool:
-    """A/B 선택형 원글에 대한 선택 표명. 원글 표기 또는 선택 어휘가 함께 있어야 한다."""
+def choice_markers(text: str) -> set[str]:
+    """댓글의 선택 표지 집합 (DN2026_0098 A3). 예: {'C'}, {'2번'}, {'위'}, {'한표'}."""
     body = normalize_comment(text)
-    if not _CHOICE_LETTER.search(body):
+    markers = {m.group(0).upper() for m in _CHOICE_LETTER.finditer(body)}
+    markers.update(f"{m.group(1)}번" for m in _CHOICE_NUMBER.finditer(body))
+    markers.update(m.group(1) for m in _CHOICE_POSITION.finditer(body))
+    if _CHOICE_VOTE.search(body):
+        markers.add("한표")
+    return markers
+
+
+def is_choice_comment(text: str, parent_text: str = "", *, extended: bool = False) -> bool:
+    """선택형 원글에 대한 선택 표명.
+
+    기본(extended=False): 기준 커밋과 동일 — A/B 문자 + 원글 표기 또는 선택 어휘.
+    extended=True (DN2026_0098 A3, X 전용): 문자 A~D, 번호·위/아래·'한 표' 표지는 단독 인정.
+    """
+    body = normalize_comment(text)
+    if extended and (_CHOICE_NUMBER.search(body) or _CHOICE_POSITION.search(body)
+                     or _CHOICE_VOTE.search(body)):
+        return True
+    letter, words = ((_CHOICE_LETTER, _CHOICE_WORDS) if extended
+                     else (_CHOICE_LETTER_BASE, _CHOICE_WORDS_BASE))
+    if not letter.search(body):
         return False
     parent = parent_text or ""
     parent_is_vote = bool(re.search(r"A\s*[)\.:]", parent) and re.search(r"B\s*[)\.:]", parent))
-    return parent_is_vote or bool(_CHOICE_WORDS.search(body))
+    return parent_is_vote or bool(words.search(body))
 
 
 def is_long_comment(text: str) -> bool:
@@ -180,7 +219,8 @@ class BatchResult(dict):
         )
 
 
-def intent_for(text: str, label: str, parent_text: str = "") -> str:
+def intent_for(text: str, label: str, parent_text: str = "", *, extended: bool = False) -> str:
+    """의도 판정. extended=True(X 전용, DN2026_0098 A3)만 확장 선택 인식·CHOICE 우선 순서."""
     body = re.sub(r"@\w+", "", text or "").strip()
     if re.search(r"돈\s*복사|가즈아|떡상|수익\s*보장|확정\s*수익", body):
         return "MARKET_HYPE"
@@ -192,11 +232,15 @@ def intent_for(text: str, label: str, parent_text: str = "") -> str:
         r"(?:축하|경하).*?(?:주셔서|주신|말씀).*?(?:감사|고맙|고마워)", body
     ):
         return "CONGRATULATIONS"
+    # DN2026_0098 A3 (extended만): 선택 표지가 있으면 걱정 어휘가 섞여도 선택 표명이다
+    # ("B 고를래요 저축 걱정…"이 WORRY로 분류되던 실측).
+    if extended and is_choice_comment(body, parent_text, extended=True):
+        return "CHOICE"
     if _is_worry(body):
         return "WORRY"
     if _GREETING_PATTERN.search(normalize_comment(body)):
         return "GREETING"
-    if is_choice_comment(body, parent_text):
+    if not extended and is_choice_comment(body, parent_text):
         return "CHOICE"
     if any(word in body for word in ("감사", "고맙", "고마워")):
         return "THANKS"
@@ -279,7 +323,8 @@ def encode_metadata(tweet: dict, *, publish_attempt: bool = False) -> str:
         }
     )
     # 생성 근거 (2026-10-28). 호출부가 넘긴 경우에만 갱신해 이전 근거를 보존한다.
-    for key in ("response_source", "draft_gate_reason", "intent"):
+    # DN2026_0098 A4: generator_version — 초안을 만든 생성기 버전 (전달 시에만 갱신, 기존 키 호환).
+    for key in ("response_source", "draft_gate_reason", "intent", "generator_version"):
         if f"_{key}" in tweet:
             previous[key] = tweet[f"_{key}"]
     if publish_attempt:
@@ -292,6 +337,28 @@ def encode_metadata(tweet: dict, *, publish_attempt: bool = False) -> str:
             if k in {"username", "created_at", "followers"}
         }
     return json.dumps(previous, ensure_ascii=False)
+
+
+# DN2026_0098 A4: 발행 요청이 나갔을 수 있는 상태. 이 경우 저장 문구를 그대로 써야 한다
+# (STD-PUB-03 무재시도·STD-PUB-06 동일 문구). PUBLISH_RETRYABLE(429)은 요청 이력이 있다.
+_PUBLISH_TOUCHED_STATES = BLOCKED_STATES | {"PUBLISH_RETRYABLE"}
+
+
+def retry_keeps_stored_text(metadata: dict | None, skip_reason: str | None = None) -> bool:
+    """재시도 건의 저장 초안을 유지해야 하면 True (DN2026_0098 A4).
+
+    발행 시도 0회(또는 키 없음)이고 결과 불명류 상태가 아니면 False → 새로 생성한 답글을 쓴다.
+    판단 근거가 불완전(값 파싱 실패)하면 보수적으로 유지(True)한다.
+    """
+    meta = metadata or {}
+    if str(skip_reason or "") in _PUBLISH_TOUCHED_STATES:
+        return True
+    if any(meta.get(k) for k in ("attempt_id", "claimed_at", "response_text_sha256")):
+        return True
+    try:
+        return int(meta.get("publish_attempts") or 0) > 0
+    except (TypeError, ValueError):
+        return True
 
 
 def classify_publish_error(error: str | None) -> str:

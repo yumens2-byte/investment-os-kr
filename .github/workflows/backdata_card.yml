@@ -3,7 +3,7 @@ name: Backdata Card
 # DN2026_0090 백데이터 반전 카드 (비정각 STD-SCHED-02, cron 문자열은 아래 job if와 같이 바꾼다 STD-SCHED-01)
 #   발행: "41 8 * * 1-5"   = KST 평일 17:41 (장 마감 15:30 이후)
 #   성과: "7 1,9,17 * * *" = KST 매일 10:07·18:07·02:07 (8시간 간격 → 24h·72h 체크포인트를 8h 이내 오차로 수집)
-# 인접 cron: following 매시 :23 / reply 1,4,9,13시 :17 UTC / collect 1,7,13,19시 :47 UTC / shock 06:55 UTC
+# 인접 cron: following 매시 :23 / reply 10분 틱 "3-59/10 * * * *"(:03·:13…·:53 UTC, gate가 40~80분 랜덤 실행 판정 DN2026_0099) / collect 1,7,13,19시 :47 UTC / shock 06:55 UTC
 on:
   schedule:
     - cron: "41 8 * * 1-5"

@@ -16,6 +16,12 @@ v1.1.0 (2026-10-07, FB-1): 플랫폼 공통화.
   BudgetGuard(costs=, limit_krw=, fallback=, cost_labels=) 키워드 전용 인자 추가.
   미지정 시 X 환경변수·상수를 사용하므로 기존 동작과 동일하다.
   Facebook은 단가가 없으므로 costs=(None, None)로 count 모드만 사용한다.
+
+v1.2.0 (2026-11-06, DN2026_0100): 읽기 리소스 단위 계상.
+  X API는 반환 리소스 단위로 과금한다(docs.x.com pricing). X_READ_RESOURCE_COST_KRW가
+  설정되고 호출부가 record_read(resources=n)으로 반환 건수를 넘기면 n × 리소스 단가로
+  계상한다. 사전 판정(can_read / available_read_calls)은 기존 호출 단가 X_READ_COST_KRW를
+  예약값으로 그대로 쓴다. resources를 넘기지 않는 호출부(following·shock 등)는 기존과 동일.
 """
 
 from __future__ import annotations
@@ -27,9 +33,10 @@ from reply_engine.config import (
     FALLBACK_WRITE_CALLS_PER_DAY,
     get_cost_per_call,
     get_daily_budget_krw,
+    get_read_resource_cost,
 )
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +61,10 @@ class BudgetGuard:
             fallback = (FALLBACK_READ_CALLS_PER_DAY, FALLBACK_WRITE_CALLS_PER_DAY)
         self.fallback_read, self.fallback_write = fallback
         self.cost_mode = self.read_cost is not None and self.write_cost is not None
+        # DN2026_0100: 리소스 단가는 X 기본 경로(costs 미지정)에서만 사용한다 (FB 등은 None).
+        self.read_resource_cost = get_read_resource_cost() if costs is None else None
+        self.resource_mode = self.cost_mode and self.read_resource_cost is not None
+        self.read_resources = 0  # 이번 실행에서 계상한 읽기 리소스 수 (리포트용)
         self.config_warnings: list[str] = []
         if not self.cost_mode:
             logger.warning(
@@ -93,6 +104,9 @@ class BudgetGuard:
             "est_cost_krw": float(self.row["est_cost_krw"]),
             "limit_krw": self.limit_krw,
             "read_cost_krw": self.read_cost,
+            "read_resource_cost_krw": self.read_resource_cost,  # DN2026_0100
+            "resource_mode": self.resource_mode,
+            "read_resources_run": self.read_resources,
             "write_cost_krw": self.write_cost,
             "config_warnings": self.config_warnings,
             # 상위 값은 reply/following이 공유하는 당일 누계다. dry_run에서 기존 write_calls가
@@ -111,14 +125,21 @@ class BudgetGuard:
             logger.warning(f"[Budget] 읽기 차단: {self._snapshot()}")
         return allowed
 
-    def available_read_calls(self, maximum: int) -> int:
-        """현재 예산으로 허용되는 읽기 수를 ``maximum`` 이내에서 계산한다."""
+    def available_read_calls(self, maximum: int, *, reserve_krw: float | None = None) -> int:
+        """현재 예산으로 허용되는 읽기 수를 ``maximum`` 이내에서 계산한다.
+
+        DN2026_0100: 리소스 모드에서 호출부가 콜당 최악 리소스 비용(reserve_krw)을 넘기면
+        호출 단가와 그 값 중 큰 값으로 예약해, 사후 리소스 계상이 예산을 넘지 않게 한다.
+        """
         maximum = max(0, int(maximum))
         if self.cost_mode:
-            if self.read_cost == 0:
+            per_call = float(self.read_cost)
+            if self.resource_mode and reserve_krw is not None:
+                per_call = max(per_call, float(reserve_krw))
+            if per_call == 0:
                 return maximum
             remaining = max(0.0, self.limit_krw - float(self.row["est_cost_krw"]))
-            return min(maximum, int(remaining // self.read_cost))
+            return min(maximum, int(remaining // per_call))
         remaining = max(0, self.fallback_read - int(self.row["read_calls"]))
         return min(maximum, remaining)
 
@@ -133,10 +154,34 @@ class BudgetGuard:
         return allowed
 
     # ── 기록 ──
-    def record_read(self) -> None:
+    def record_read(self, resources: int | None = None) -> None:
+        """읽기 1콜 계상. DN2026_0100: resources를 넘기면 리소스 단위로 계상한다."""
         self.row["read_calls"] = int(self.row["read_calls"]) + 1
-        if self.cost_mode:
+        if not self.cost_mode:
+            return
+        if self.resource_mode and resources is not None:
+            count = max(0, int(resources))
+            self.read_resources += count
+            self.row["est_cost_krw"] = (
+                float(self.row["est_cost_krw"]) + count * float(self.read_resource_cost)
+            )
+        else:
             self.row["est_cost_krw"] = float(self.row["est_cost_krw"]) + self.read_cost
+
+    def settle_read(self, resources: int) -> None:
+        """DN2026_0100: 호출 전에 record_read()로 예약한 1콜을 실제 리소스 수로 정산한다.
+
+        리소스 모드가 아니면 아무것도 하지 않는다 (예약한 호출 단가가 그대로 계상값).
+        """
+        if not self.resource_mode:
+            return
+        count = max(0, int(resources))
+        self.read_resources += count
+        adjusted = (
+            float(self.row["est_cost_krw"]) - float(self.read_cost)
+            + count * float(self.read_resource_cost)
+        )
+        self.row["est_cost_krw"] = max(float(self._initial_row["est_cost_krw"]), adjusted)
 
     def record_write(self) -> None:
         self.row["write_calls"] = int(self.row["write_calls"]) + 1

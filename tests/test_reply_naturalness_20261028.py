@@ -337,4 +337,4 @@ def test_encode_metadata_keeps_previous_evidence_when_absent():
         {"text": "t", "_response_source": "AI", "_draft_gate_reason": None, "_intent": "ACK"}))
     again = json.loads(policy.encode_metadata({"text": "t", "_metadata": first}))
     assert (again["response_source"], again["intent"]) == ("AI", "ACK")
-    assert again["reply_policy"] == policy.POLICY_VERSION == "2.2.0"
+    assert again["reply_policy"] == policy.POLICY_VERSION == "2.3.0"  # DN2026_0098

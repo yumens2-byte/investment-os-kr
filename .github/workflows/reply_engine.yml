@@ -1,6 +1,11 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
+# v2.1.0 (2026-11-06, DN2026_0099) 고정 cron 4회 → 40~80분 랜덤 간격 실행 (KST 03시대 제외)
+#   - 10분 틱 + gate job(scripts.reply_schedule_gate decide)이 kr_reply_schedule.next_run_at으로 판정
+#   - gate decide가 RUN_DUE 판정 시 다음 실행 시각 = tick_at + U(40,70)분을 선점 기록 (시작→시작 간격,
+#     모든 모드, 조건부 갱신). 선점 실패 시 SKIP_GATE_ERROR. reply job 끝 스텝은 텔레메트리(읽기)만.
+#   - concurrency를 워크플로 레벨 → reply job 레벨로 이동
 # v2.0.0 (2026-10-02)
 # ──────────────────────────────────────────────────────────────
 # 내 게시글 댓글 자동 호응 답글 파이프라인 (run_reply.py)
@@ -12,12 +17,15 @@ name: X Reply Engine
 #   X_READ_COST_KRW / X_WRITE_COST_KRW : 호출 단가 (미설정 시 count 모드 fallback)
 #
 # [모드 우선순위] dispatch input > vars.REPLY_MODE > 'dry_run' (schedule 안전 기본값)
-# [cron] KST 10:17 / 13:17 / 18:17 / 22:17 — Actions 혼잡 시간대 분산
+# [cron] DN2026_0099: "3-59/10 * * * *" = 매시 :03/:13/:23/:33/:43/:53 UTC 10분 틱
+#        (정각·반각 회피 STD-SCHED-02). 틱 자체는 실행이 아니다 — gate job의 decision이
+#        RUN_DUE일 때만 test·reply가 돈다. 실제 실행 간격 40~80분, KST 03:00~03:59 실행 없음.
+#        인접 cron 매핑 주석: backdata_card.yml 6행 (STD-SCHED-01 동시 갱신)
 # ──────────────────────────────────────────────────────────────
 
 on:
   schedule:
-    - cron: "17 1,4,9,13 * * *"
+    - cron: "3-59/10 * * * *"   # DN2026_0099 10분 틱 (실행 판정은 gate job)
 
   workflow_dispatch:
     inputs:
@@ -34,17 +42,94 @@ on:
 permissions:
   contents: read
 
-# L3 가드: cron + dispatch 동시 실행 차단 (중복 답글 방지)
-concurrency:
-  group: reply-engine
-  cancel-in-progress: false
+# DN2026_0099: 워크플로 레벨 concurrency 없음 — L3 가드는 reply job 레벨로 이동했다.
+#   이유: GitHub concurrency는 그룹당 running 1 + pending 1이며 새 pending이 기존 pending을 취소한다.
+#   10분 틱 중 실행 대상이 아닌 틱이 공유 그룹(reply-engine)의 pending을 교체해
+#   reply_engine_collect / reply_engine_beta의 대기 실행이 취소되는 것을 막는다.
 
 jobs:
+  # ─────────────────────────────────────────
+  # Job 0: 랜덤 간격 실행 게이트 (DN2026_0099)
+  # ─────────────────────────────────────────
+  gate:
+    name: Schedule Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      # RUN_DUE | SKIP_NOT_DUE | SKIP_NIGHT | SKIP_GATE_ERROR
+      # 게이트 스크립트 부재 시 preflight가 SKIP_GATE_ERROR를 쓰고 decide는 건너뛴다 (둘 중 하나만 값 보유)
+      decision: ${{ steps.decide.outputs.decision || steps.preflight.outputs.decision }}
+      tick_at: ${{ steps.decide.outputs.tick_at || steps.preflight.outputs.tick_at }}
+
+    steps:
+      # test job과 같은 승인 런타임 ref 검증 (게이트 코드도 승인 릴리스 기준으로 실행)
+      - name: Validate approved runtime ref
+        env:
+          RUNTIME_REF: ${{ vars.REPLY_RELEASE_SHA || github.sha }}
+        run: |
+          [[ "$RUNTIME_REF" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid release SHA"; exit 1; }
+          echo "REPLY_RUNTIME_SHA=$RUNTIME_REF" >> "$GITHUB_ENV"
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REPLY_RUNTIME_SHA }}
+
+      # DN2026_0099: REPLY_RELEASE_SHA가 게이트 도입 이전 커밋이면 모듈 부재로 decide가 깨진다.
+      #   이 경우 SKIP_GATE_ERROR를 직접 출력하고 decide 이하를 건너뛴다 (job은 성공 종료, fail-closed).
+      - name: Check gate script
+        id: preflight
+        run: |
+          if [[ -f scripts/reply_schedule_gate.py ]]; then
+            echo "gate_script=PRESENT" >> "$GITHUB_OUTPUT"
+          else
+            tick_at="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+            {
+              echo "gate_script=MISSING"
+              echo "decision=SKIP_GATE_ERROR"
+              echo "tick_at=$tick_at"
+            } >> "$GITHUB_OUTPUT"
+            echo "::error::REPLY_RELEASE_SHA가 DN2026_0099 이전 커밋 — 변수 갱신 필요"
+            {
+              echo "### Reply schedule gate — skipped"
+              echo "- decision: \`SKIP_GATE_ERROR\`"
+              echo "- reason: scripts/reply_schedule_gate.py 없음 (REPLY_RELEASE_SHA 갱신 필요)"
+              echo "- tick_at: \`$tick_at\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Setup Python 3.11
+        if: steps.preflight.outputs.gate_script == 'PRESENT'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        if: steps.preflight.outputs.gate_script == 'PRESENT'
+        run: |
+          if [[ -f requirements-reply.lock ]]; then
+            pip install -r requirements-reply.lock
+          else
+            pip install -r requirements.txt
+          fi
+
+      - name: Decide
+        id: decide
+        if: steps.preflight.outputs.gate_script == 'PRESENT'
+        env:
+          SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:           ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+        run: python -m scripts.reply_schedule_gate decide
+
   # ─────────────────────────────────────────
   # Job 1: 테스트 게이트
   # ─────────────────────────────────────────
   test:
     name: Run Tests
+    needs: gate                                          # DN2026_0099
+    if: needs.gate.outputs.decision == 'RUN_DUE'         # DN2026_0099
     outputs:
       runtime_sha: ${{ steps.runtime.outputs.sha }}
     runs-on: ubuntu-latest
@@ -86,8 +171,14 @@ jobs:
   # ─────────────────────────────────────────
   reply:
     name: Reply Pipeline
-    needs: test
+    needs: [gate, test]                                  # DN2026_0099
+    if: needs.gate.outputs.decision == 'RUN_DUE'         # DN2026_0099
     runs-on: ubuntu-latest
+    # L3 가드: cron + dispatch + collect/beta 동시 실행 차단 (중복 답글 방지, STD-SCHED-05)
+    # DN2026_0099: 워크플로 레벨 → job 레벨 이동 (상단 주석 참조)
+    concurrency:
+      group: reply-engine
+      cancel-in-progress: false
     timeout-minutes: 45   # 기본 회당 2건 + 제한적 멘션 페이지네이션 여유
 
     steps:
@@ -190,6 +281,9 @@ jobs:
           DAILY_BUDGET_KRW:       ${{ vars.DAILY_BUDGET_KRW }}
           X_READ_COST_KRW:        ${{ vars.X_READ_COST_KRW }}
           X_WRITE_COST_KRW:       ${{ vars.X_WRITE_COST_KRW }}
+          # DN2026_0100 (STD-CFG-03): 읽기 리소스 단가·타인 스레드 일일 상한 — 미등록 시 코드 기본값
+          X_READ_RESOURCE_COST_KRW: ${{ vars.X_READ_RESOURCE_COST_KRW }}
+          REPLY_FOREIGN_THREAD_DAILY_CAP: ${{ vars.REPLY_FOREIGN_THREAD_DAILY_CAP }}
           X_MY_USER_ID:           ${{ vars.X_MY_USER_ID }}
 
           # 운영 장애 알림 (미설정 시 core.alert가 안전하게 no-op)
@@ -197,6 +291,17 @@ jobs:
           TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
 
         run: python run_reply.py
+
+      # DN2026_0099: 스케줄 텔레메트리 (읽기 전용 JSON 1건). next_run_at은 gate가 선점 기록했으므로
+      #   여기서는 쓰지 않는다 (이중 기록 금지). 실패해도 job을 실패시키지 않는다.
+      - name: Record schedule telemetry
+        if: always() && needs.gate.outputs.decision == 'RUN_DUE'
+        continue-on-error: true
+        env:
+          TICK_AT:                ${{ needs.gate.outputs.tick_at }}   # STD-SCHED-08 env 경유
+          SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:           ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
+        run: python -m scripts.reply_schedule_gate report --tick-at "$TICK_AT"
 
       # 실행 리포트 artifact (모드 무관 — shadow/live 검수용, HG-2/HG-4)
       - name: Upload run report
@@ -209,5 +314,6 @@ jobs:
             logs/reply_db_audit.json
             logs/reply_*.log
             logs/reply_events.jsonl
+            logs/reply_schedule_*.json
           retention-days: 14
           if-no-files-found: warn

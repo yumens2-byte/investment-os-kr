@@ -48,6 +48,8 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_REPLY_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
           DAILY_BUDGET_KRW: ${{ vars.DAILY_BUDGET_KRW }}
           X_READ_COST_KRW: ${{ vars.X_READ_COST_KRW }}
+          # DN2026_0100: 읽기 리소스 단위 계상 (미등록 시 호출 단위 유지)
+          X_READ_RESOURCE_COST_KRW: ${{ vars.X_READ_RESOURCE_COST_KRW }}
           X_WRITE_COST_KRW: ${{ vars.X_WRITE_COST_KRW }}
         run: python -m scripts.collect_reply
       - name: Check collection heartbeat

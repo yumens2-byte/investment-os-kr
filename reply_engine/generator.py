@@ -35,6 +35,9 @@ v2.3.0 (2026-10-28): 상투 문구 수렴 해소.
   - 댓글당 후보 3개(replies) 요청 → 호출부가 gate.choose_reply로 첫 통과 후보 선택
   - 긴 의견 댓글은 max_len 60, 댓글 속 구체 소재 하나를 받아 호응
   - 걱정·인사·선택·긴 의견 의도 추가 (policy.intent_for)
+
+v2.4.0 (2026-11-06, DN2026_0098 A1): X 소재 유지 블록의 복창 유도 문장·예시 제거 →
+  "상대 말에 대한 내 반응" 방향으로 교체. FB 경로 문구는 바이트 불변(_SUBJECT_RULE_LEGACY).
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ from reply_engine.policy import SAFE_POOLS, BatchResult, intent_for, reply_max_l
 
 CANDIDATES_PER_ITEM = 3
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"  # DN2026_0098
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +138,11 @@ def _pick_from_pool(category: str, seed_key: str) -> str:
     return pool[int(digest[:8], 16) % len(pool)]
 
 
-def _format_item(item: dict) -> str:
-    """Untrusted input as JSON, with explicit parent/comment author roles."""
+def _format_item(item: dict, *, extended: bool = False) -> str:
+    """Untrusted input as JSON, with explicit parent/comment author roles.
+
+    extended: DN2026_0098 X 전용 의도 판정 (generate_batch가 platform=='x'일 때만 True).
+    """
     return json.dumps(
         {
             "id": item["id"],
@@ -146,7 +152,8 @@ def _format_item(item: dict) -> str:
             "root_author_id": item.get("root_author_id", "(확인 불가)"),
             "scope": "FOREIGN_DIRECT" if item.get("foreign_thread") else "OWN_ROOT",
             "intent": intent_for(
-                item.get("text", ""), item.get("label", ""), item.get("parent_text", "")
+                item.get("text", ""), item.get("label", ""), item.get("parent_text", ""),
+                extended=extended,  # DN2026_0098
             ),
             "max_len": reply_max_length(item.get("text", "")),
             **({"recent_response_texts": item["_recent_texts"][-10:]}
@@ -159,15 +166,47 @@ def _format_item(item: dict) -> str:
     )
 
 
-def contextual_fallbacks(item: dict) -> tuple[str, ...]:
-    """Use the same language and intent pool for every recovery candidate."""
+def contextual_fallbacks(item: dict, *, extended: bool = False) -> tuple[str, ...]:
+    """Use the same language and intent pool for every recovery candidate.
+
+    X 전용 확장 의도 판정(DN2026_0098): generate_batch는 platform=='x'일 때 extended=True,
+    run_reply는 item["_platform"]="x" 표식으로 켠다 (기존 1-인자 호출·mock 계약 유지).
+    """
+    extended = extended or item.get("_platform") == "x"
     pool = (
         _POOL_NON_KR
         if is_non_korean(item["text"])
-        else SAFE_POOLS[intent_for(item["text"], item["label"], item.get("parent_text", ""))]
+        else SAFE_POOLS[intent_for(item["text"], item["label"], item.get("parent_text", ""),
+                                   extended=extended)]
     )
     first = int(hashlib.sha256(item["id"].encode()).hexdigest()[:8], 16) % len(pool)
     return pool[first:] + pool[:first]
+
+# FB(및 X 외 플랫폼) 경로의 소재 유지 규칙 — 바이트 불변 (DN2026_0098 A1, FB 골든 보존).
+_SUBJECT_RULE_LEGACY = (
+    "짧은 관찰 댓글도 구체적인 지표·대상을 '시장 분위기', '그 부분'으로 뭉개지 않는다. "
+    "댓글에 직접 나온 소재 하나를 유지하되 수치·원인·전망을 새로 추가하지 않는다. "
+    "예: '시장폭 플러스가 눈에 들어오네요'에는 '시장폭 쪽을 짚어주셨네요'처럼 "
+    "관찰 대상을 받아주며, 상대 심리를 '~시나 봐요'로 추측하지 않는다.\n"
+)
+
+# DN2026_0098 A1: X 전용. 복창 유도 문장·예시("~짚어주셨네요")를 제거하고
+# '상대 말에 대한 내 반응'으로 방향을 바꾼다. 예시 문장은 복사 원천이 되므로 두지 않는다.
+_SUBJECT_RULE_X = (
+    "상대 문장을 다시 서술하거나 요약하지 않는다. 상대가 무엇을 골랐는지·느꼈는지·짚었는지를 "
+    "'~셨군요', '~시는군요', '~나 봐요', '~셨네요', '~다니 다행이에요'로 해석하거나 "
+    "되돌려 말하지 않는다. 상대가 건넨 말에 대한 내 반응(감사·공감·맞장구)을 쓴다. "
+    "댓글의 소재어는 필요할 때만 한 번 쓰고, 수치·원인·전망을 새로 추가하지 않는다. "
+    "댓글에 없는 다른 소재로 바꾸지 않고, 나를 칭찬하는 말로 바꾸지 않는다. "
+    "CHOICE는 선택지 문자·번호·위/아래를 다시 쓰지 않고 참여에 대한 짧은 감사만 하며 "
+    "선택 평가·응원·결과 예고를 하지 않는다. "
+    "OPINION은 어느 의견에나 붙는 범용 문구 대신 댓글 속 핵심어 하나를 담아 공감한다.\n"
+)
+
+
+def _subject_rule(platform: str) -> str:
+    """_preserve_subject 블록 문구. X만 DN2026_0098 문구, 그 외는 기존 바이트 그대로."""
+    return _SUBJECT_RULE_X if platform == "x" else _SUBJECT_RULE_LEGACY
 
 
 def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
@@ -213,7 +252,8 @@ def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
         logger.info("[Generator] AI 생성 대상 없음 — Gemini 호출 생략")
         return replies
 
-    prompt_items = "\n".join(_format_item(i) for i in ai_items)
+    x_path = platform == "x"  # DN2026_0098: 확장 의도 판정은 X만
+    prompt_items = "\n".join(_format_item(i, extended=x_path) for i in ai_items)
     prompt = (
         PERSONAS[platform]
         + "짧고 자연스러운 SNS 존댓말 답글을 작성한다. "
@@ -253,11 +293,7 @@ def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
         "매번 같은 이모지 금지. "
         "'댓글 잘 봤어요', '관심 가져주셔서 감사해요'처럼 어느 댓글에나 붙는 상투 문구를 피하고 "
         "이 댓글에만 어울리는 표현을 쓴다. 모든 답글을 감사나 화이팅으로 끝내지 않는다.\n"
-        + ("짧은 관찰 댓글도 구체적인 지표·대상을 '시장 분위기', '그 부분'으로 뭉개지 않는다. "
-        "댓글에 직접 나온 소재 하나를 유지하되 수치·원인·전망을 새로 추가하지 않는다. "
-        "예: '시장폭 플러스가 눈에 들어오네요'에는 '시장폭 쪽을 짚어주셨네요'처럼 "
-        "관찰 대상을 받아주며, 상대 심리를 '~시나 봐요'로 추측하지 않는다.\n"
-           if any(i.get("_preserve_subject") for i in ai_items) else "")
+        + (_subject_rule(platform) if any(i.get("_preserve_subject") for i in ai_items) else "")
         + ("recent_response_texts는 최근 발행 문구다. 그 표현과 겹치지 않게 쓴다.\n"
            if any("_recent_texts" in i for i in ai_items) else "")
         + f"{prompt_items}\n"
@@ -296,7 +332,7 @@ def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
         drafts = [] if item["id"] in duplicates else ai_replies.get(item["id"], [])
         replies.sources[item["id"]] = "AI"
         if not drafts:
-            reply = contextual_fallbacks(item)[0]
+            reply = contextual_fallbacks(item, extended=x_path)[0]
             replies.sources[item["id"]] = "TEMPLATE_FALLBACK"
             logger.info(f"[Generator] id={item['id']} 풀 fallback 사용")
         else:

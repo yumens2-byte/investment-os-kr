@@ -32,13 +32,15 @@ v2.1.0 (2026-10-07, FB-1): is_enabled(var=) / get_mode(var=) 키워드 인자 �
   기본값은 REPLY_ENABLED / REPLY_MODE 그대로이며, Facebook은 FACE_REPLY_* 변수로
   같은 엄격 판독 규칙(정확히 'true', 인식 불가 모드는 dry_run 강등)을 재사용한다.
 v2.2.0 (2026-10-28): REPLY_MAX_LENGTH_LONG / REPLY_LONG_COMMENT_CHARS 신설 (긴 의견 답글 상한).
+v2.3.0 (2026-11-06, DN2026_0100): REPLY_FOREIGN_THREAD_DAILY_CAP, get_read_resource_cost()
+  (X_READ_RESOURCE_COST_KRW, 읽기 리소스 단위 계상) 신설.
 """
 
 from __future__ import annotations
 
 import os
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 
 def env_int(name: str, default: int) -> int:
@@ -200,7 +202,9 @@ REPLY_RETRY_WINDOW_HOURS: int = env_int("REPLY_RETRY_WINDOW_HOURS", 24)
 # 주의: 일일 상한이 아니라 '회당' 상한이다. kr_reply_history에 타인 스레드
 # 여부를 저장하는 컬럼이 없어 DB 기준 일일 집계가 불가능하기 때문이며,
 # 스키마 변경 없이 안전하게 제한하기 위한 설계다.
-# cron 4회 기준 실질 일 상한 = REPLY_FOREIGN_THREAD_RUN_CAP × 4.
+# DN2026_0100: 40~80분 랜덤 실행(DN2026_0099)으로 하루 실행 수가 약 23회가 되어
+#   '회당 상한 × 실행 수'가 일 상한 역할을 못 하므로, metadata(foreign_thread) 기준
+#   일일 상한 REPLY_FOREIGN_THREAD_DAILY_CAP을 별도로 둔다 (STD-PUB-09 이중 계수).
 # ⚠️ 기본 비활성(opt-in). P-1(2026-08-18)은 실사고 대응 방어선이다:
 #    내가 타인 글에 축하 댓글 → 글 주인이 "축하해주셔서 감사합니다" 답글 →
 #    봇이 "축하해주셔서 진심으로 감사합니다"로 미러링한 주객전도 사고.
@@ -210,6 +214,8 @@ REPLY_RETRY_WINDOW_HOURS: int = env_int("REPLY_RETRY_WINDOW_HOURS", 24)
 #    의미 역전("축하드려요! 🎉")은 통과하므로 2차 방어선은 불완전하다.
 REPLY_FOREIGN_THREAD_ENABLED: bool = env_bool("REPLY_FOREIGN_THREAD_ENABLED", False)
 REPLY_FOREIGN_THREAD_RUN_CAP: int = env_int_clamped("REPLY_FOREIGN_THREAD_RUN_CAP", 1, 1, 3)
+# DN2026_0100: 타인 스레드 일일 상한 (기본 4 = 종전 cron 4회 × 회당 1의 실질 상한 유지)
+REPLY_FOREIGN_THREAD_DAILY_CAP: int = env_int_clamped("REPLY_FOREIGN_THREAD_DAILY_CAP", 4, 1, 20)
 
 # Link-bearing comments can be reviewed in context; opt-in until offline quality review.
 REPLY_LINK_REVIEW_ENABLED: bool = env_bool("REPLY_LINK_REVIEW_ENABLED", False)
@@ -263,6 +269,22 @@ def get_cost_per_call() -> tuple[float | None, float | None]:
         return value if value >= 0 else None
 
     return _parse("X_READ_COST_KRW"), _parse("X_WRITE_COST_KRW")
+
+
+def get_read_resource_cost() -> float | None:
+    """DN2026_0100: X 읽기 리소스 1건 단가(원). 미설정/파싱 불가/음수 → None(호출 단위 계상 유지).
+
+    X API는 반환 리소스 단위로 과금한다(docs.x.com pricing, Posts: Read $0.005/resource).
+    호출 단위 X_READ_COST_KRW는 사전 판정(예약)용으로 그대로 쓰고, 이 값은 실제 계상에만 쓴다.
+    """
+    raw = os.environ.get("X_READ_RESOURCE_COST_KRW", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
 
 
 def get_my_user_id() -> str:

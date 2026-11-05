@@ -65,7 +65,9 @@ def test_generator_receives_latest_ten_and_specific_subject_instruction(monkeypa
     row = next(json.loads(line) for line in captured[0].splitlines() if line.startswith('{"id"'))
     assert row['recent_response_texts'] == list(reversed(newest_first[:10]))
     assert newest_first[0] == 'previous-0'  # do not mutate the store result
-    assert '구체적인 지표·대상' in captured[0]
+    # DN2026_0098 A1: X 소재 블록은 복창 유도 예시를 제거하고 '내 반응' 방향으로 교체됐다.
+    assert '상대가 건넨 말에 대한 내 반응' in captured[0]
+    assert '짚어주셨네요' not in captured[0]
 
 
 @pytest.mark.parametrize('cap,expected', [(1, 1), (2, 2)])

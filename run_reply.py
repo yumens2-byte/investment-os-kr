@@ -42,6 +42,13 @@ v1.4.0 (2026-08-30, R-9):
 v2.2.0 (2026-10-07, FB-1):
   리포트 본문을 telemetry.write_run_report로 공통화 (Facebook 러너와 공유).
   판단 흐름·호출 인자·DB 테이블은 변경 없음.
+
+v2.4.0 (2026-11-06, DN2026_0098 A4):
+  재시도 건 중 발행 시도 0회·결과 불명 아님 → 저장 옛 초안 대신 새 생성 답글 사용.
+  발행 시도 이력/결과 불명 건은 저장 문구 유지 (STD-PUB-03·STD-PUB-06).
+  초안 metadata에 generator_version.
+  같은 릴리스 DN2026_0100: 읽기 리소스 단위 계상(record_read(resources=)),
+  타인 스레드 일일 상한 REPLY_FOREIGN_THREAD_DAILY_CAP.
 """
 
 from __future__ import annotations
@@ -60,6 +67,7 @@ from reply_engine import classifier, gate, generator, lang, store, telemetry, x_
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     MENTIONS_MAX_PAGES,
+    MENTIONS_MAX_RESULTS,
     PUBLISH_JITTER_MAX_SEC,
     PUBLISH_JITTER_MIN_SEC,
     PUBLISH_START_DELAY_MAX_SEC,
@@ -67,6 +75,7 @@ from reply_engine.config import (
     REPLY_CONV_DAILY_CAP,
     REPLY_CURSOR_STALE_WARN_HOURS,
     REPLY_DAILY_CAP,
+    REPLY_FOREIGN_THREAD_DAILY_CAP,
     REPLY_FOREIGN_THREAD_ENABLED,
     REPLY_FOREIGN_THREAD_RUN_CAP,
     REPLY_LIKE_PER_DAY,
@@ -87,9 +96,10 @@ from reply_engine.policy import (
     decode_metadata,
     encode_metadata,
     intent_for,
+    retry_keeps_stored_text,
 )
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"  # DN2026_0098 · DN2026_0100
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -254,7 +264,7 @@ def main() -> dict:
         logger.info(f"[Step2] user_id 확보 (get_me 생략): {my_user_id}")
     else:
         my_user_id = x_client.fetch_my_user_id(client) or ""
-        guard.record_read()
+        guard.record_read(resources=1 if my_user_id else 0)  # DN2026_0100 리소스 단위
         if not my_user_id:
             summary["exit_reason"] = "EXIT_GET_ME_FAIL"
             if db_write_allowed:
@@ -280,13 +290,25 @@ def main() -> dict:
     # 대화 루트 소유자 검증 1콜을 남겨 수집만 성공하고 전건 미검증 스킵되는 상황을 막는다.
     # 테스트/통합 코드가 레거시 3-인자 함수를 교체한 경우에는 기존 규약을 보존한다.
     if x_client.fetch_mentions is _DEFAULT_FETCH_MENTIONS:
-        available_reads = guard.available_read_calls(MENTIONS_MAX_PAGES + 1)
+        # DN2026_0100: 리소스 모드면 페이지당 최악 비용(max_results × 3리소스 × 단가)으로 예약
+        _page_reserve = (
+            MENTIONS_MAX_RESULTS * 3 * float(guard.read_resource_cost)
+            if guard.resource_mode else None
+        )
+        available_reads = guard.available_read_calls(
+            MENTIONS_MAX_PAGES + 1, reserve_krw=_page_reserve
+        )
         fetch_pages = max(1, min(MENTIONS_MAX_PAGES, available_reads - 1))
         fetched = x_client.fetch_mentions(client, my_user_id, since_id, max_pages=fetch_pages)
     else:
         fetched = x_client.fetch_mentions(client, my_user_id, since_id)
-    for _ in range(max(1, int(fetched.get("pages_fetched", 1)))):
-        guard.record_read()
+    # DN2026_0100: X는 반환 리소스 단위로 과금 — 첫 페이지 계상에 반환 건수를 싣고
+    # 나머지 페이지는 0건으로 콜 수만 센다(리소스 단가 미설정 시 기존 호출 단가 계상).
+    # 멘션 1건 = 본문 + expansions(부모 트윗 referenced_tweets.id, 작성자 author_id)로 최대 3리소스.
+    # 확장 리소스의 과금 여부·단가는 공식 문서에 명시가 없어 보수적으로 3배 계상한다(확인 필요).
+    _mention_resources = 3 * len(fetched.get("tweets") or [])
+    for _page in range(max(1, int(fetched.get("pages_fetched", 1)))):
+        guard.record_read(resources=_mention_resources if _page == 0 else 0)
     if not fetched["success"]:
         # N-1 (2026-08-25): 월간 지출 상한은 재시도로 풀리지 않는 플랫폼 사유 — 구분 보고
         if x_client.is_spend_cap_error(fetched.get("error")):
@@ -414,6 +436,7 @@ def main() -> dict:
                 "_retry": True,
                 "_run_id": summary["run_id"],
                 "_stored_response_text": row.get("response_text") or "",
+                "_retry_skip_reason": row.get("skip_reason") or "",  # DN2026_0098 A4
             }
         )
         current_ids.add(tid)
@@ -517,8 +540,9 @@ def main() -> dict:
                 )
             else:
                 roots = x_client.fetch_conversation_roots(client, conv_ids)
-            for _ in range(getattr(roots, "api_calls", 1)):
-                guard.record_read()
+            _root_resources = sum(1 for v in (roots or {}).values() if v)  # DN2026_0100
+            for _call in range(getattr(roots, "api_calls", 1)):
+                guard.record_read(resources=_root_resources if _call == 0 else 0)
         else:
             logger.warning("[Step3.5] 읽기 예산 부족 — 루트 미검증 후보 전량 보수적 스킵")
 
@@ -615,6 +639,13 @@ def main() -> dict:
     generated_ids: set[str] = set()
     summary["non_kr_replies"] = sum(lang.is_non_korean(t["text"]) for t in pass_items)
 
+    def _keeps_stored_text(item: dict) -> bool:
+        # DN2026_0098 A4: 재시도 건 중 저장 초안을 그대로 써야 하는 건.
+        return bool(
+            item.get("_retry") and item.get("_stored_response_text")
+            and retry_keeps_stored_text(item.get("_metadata"), item.get("_retry_skip_reason"))
+        )
+
     def generate_window(index: int, capacity: int) -> None:
         # Generate only a bounded window that can fit the remaining publication slots.
         window = [t for t in pass_items[index:index + capacity] if t["id"] not in generated_ids]
@@ -633,15 +664,24 @@ def main() -> dict:
             guard.record_gemini()
         summary["model_usage"].extend(getattr(batch, "usage", []))
         for item in window:
-            if item.get("_retry") and item.get("_stored_response_text"):
+            # DN2026_0098 A4: 발행 시도 이력/결과 불명 건만 저장 문구 유지 (STD-PUB-06).
+            if _keeps_stored_text(item):
                 replies[item["id"]] = item["_stored_response_text"]
                 reply_candidates.pop(item["id"], None)
+            else:
+                item["_generator_version"] = generator.VERSION
 
     # ── Step 6~8: 게이트 → 발행 → 기록 ───────────────────────
     # DB returns newest first; keep chronological order so [-10:] and append()
     # consistently supply the latest replies to subsequent generation windows.
     recent_texts = list(reversed(store.get_recent_response_texts(REPLY_RECENT_COMPARE_COUNT)))
     responded_today = store.count_responded_today()
+    # DN2026_0100: 타인 스레드 일일 상한 — 해당 후보가 있을 때만 조회한다.
+    foreign_today = (
+        store.count_foreign_responded_today()
+        if any(t.get("foreign_thread") for t in pass_items)
+        else 0
+    )
     published_this_run = 0
     publish_attempts_this_run = 0
     quota_used_this_run = 0
@@ -658,7 +698,7 @@ def main() -> dict:
         author_id = tweet["author_id"]
         conversation_id = tweet["conversation_id"]
         reply_text = (replies.get(tweet_id) or "").strip()
-        if tweet.get("_retry"):
+        if _keeps_stored_text(tweet):  # DN2026_0098 A4
             response_source = "DB_RETRY"
         else:
             response_source = getattr(replies, "sources", {}).get(
@@ -675,7 +715,9 @@ def main() -> dict:
         elif responded_today + quota_used_this_run >= REPLY_DAILY_CAP:
             skip_reason = "DAILY_CAP"
         elif (tweet.get("foreign_thread")
-              and foreign_reserved_this_run >= REPLY_FOREIGN_THREAD_RUN_CAP):
+              and (foreign_reserved_this_run >= REPLY_FOREIGN_THREAD_RUN_CAP
+                   or foreign_today + foreign_reserved_this_run
+                   >= REPLY_FOREIGN_THREAD_DAILY_CAP)):  # DN2026_0100 일일 상한
             skip_reason = "FOREIGN_THREAD_CAP"
         elif published_author_run.get(author_id, 0) >= REPLY_AUTHOR_DAILY_CAP:
             skip_reason = "AUTHOR_CAP_RUN"  # R-2 2차 방어선
@@ -691,7 +733,7 @@ def main() -> dict:
                 ))
                 generate_window(idx, capacity)
             reply_text = (replies.get(tweet_id) or "").strip()
-            if not tweet.get("_retry"):
+            if not _keeps_stored_text(tweet):  # DN2026_0098 A4
                 response_source = reply_sources.get(
                     tweet_id, "TEMPLATE_NON_KR" if lang.is_non_korean(tweet["text"]) else "AI"
                 )
@@ -700,9 +742,11 @@ def main() -> dict:
             gated = True
             drafts = reply_candidates.get(tweet_id) or [reply_text]
             chosen, chosen_source, draft_gate_reason = gate.choose_reply(
-                drafts, generator.contextual_fallbacks(tweet), recent_texts,
+                # DN2026_0098: 위치 인자 1개 계약(테스트 mock 포함) 유지 — X 표식은 item 키로 전달.
+                drafts, generator.contextual_fallbacks({**tweet, "_platform": "x"}), recent_texts,
                 comment_text=tweet["text"],
                 context={**tweet, "_account_user_id": my_user_id},
+                strict=True,  # DN2026_0098: X 전용 판정
             )
             if chosen is not None and chosen_source != "AI":
                 logger.info(
@@ -727,7 +771,8 @@ def main() -> dict:
             evidence_tweet.update(
                 _response_source=response_source,
                 _draft_gate_reason=draft_gate_reason,
-                _intent=intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", "")),
+                _intent=intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", ""),
+                                   extended=True),  # DN2026_0098
             )
             summary["source_counts"][response_source] = (
                 summary["source_counts"].get(response_source, 0) + 1
@@ -760,7 +805,8 @@ def main() -> dict:
             "source": response_source,
             "draft_gate_reason": draft_gate_reason,
             "quality_evaluated": gated,
-            "intent": intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", "")),
+            "intent": intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", ""),
+                                 extended=True),  # DN2026_0098
             "foreign_thread": bool(tweet.get("foreign_thread")),
             "scope": telemetry.scope_for(tweet, my_user_id),
             "eligible": True,

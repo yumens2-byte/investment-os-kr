@@ -34,6 +34,8 @@ v2.2.0 (2026-10-07, FB-1): 플랫폼 공통화.
   X 호출부는 인자를 넘기지 않으므로 요청 테이블·쿼리는 기존과 동일하다.
   Facebook은 ``bind(FB 테이블)``로 같은 CAS/claim/복구 코드를 재사용한다.
   ``get_client``는 계속 모듈 전역에서 조회한다 (기존 테스트 patch 규약 보존).
+
+v2.3.0 (2026-11-06, DN2026_0100): count_foreign_responded_today() 신설 (타인 스레드 일일 상한).
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ from db.supabase_client import get_client
 from reply_engine.config import REPLY_MAX_AGE_HOURS, REPLY_RETRY_WINDOW_HOURS
 from reply_engine.policy import BLOCKED_STATES, DEFER_REASONS, decode_metadata, encode_metadata
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +343,28 @@ def count_conversation_responded_today(
 def count_responded_today(*, tables: ReplyTables = X_TABLES) -> int:
     """일일 답글 상한 체크용 총 발행 수."""
     return _count_today("", "", responded_only=True, tables=tables)
+
+
+def count_foreign_responded_today(*, tables: ReplyTables = X_TABLES) -> int:
+    """DN2026_0100: 오늘(KST) 타인 스레드(metadata foreign_thread=true) 발행·발행중 수.
+
+    kr_reply_history에 전용 컬럼이 없어 policy.encode_metadata가 남기는 JSON 문자열로 센다.
+    조회 실패 시 큰 값 반환 (보수적 차단, _count_today와 동일 규칙).
+    """
+    try:
+        result = (
+            get_client()
+            .table(tables.history)
+            .select("reply_tweet_id", count="exact")
+            .gte("created_at", kst_day_start_utc_iso())
+            .like("error_message", '%"foreign_thread": true%')
+            .or_("responded.eq.true,skip_reason.in.(PUBLISHING,PUBLISH_UNKNOWN,DB_CONFIRM_FAIL)")
+            .execute()
+        )
+        return int(result.count or 0)
+    except Exception as exc:
+        logger.error(f"[Store] 타인 스레드 당일 카운트 조회 실패: {exc}")
+        return 10**9
 
 
 def get_history_metrics(days: int = 7, *, tables: ReplyTables = X_TABLES) -> dict:
