@@ -202,7 +202,7 @@ REPLY_RETRY_WINDOW_HOURS: int = env_int("REPLY_RETRY_WINDOW_HOURS", 24)
 # 주의: 일일 상한이 아니라 '회당' 상한이다. kr_reply_history에 타인 스레드
 # 여부를 저장하는 컬럼이 없어 DB 기준 일일 집계가 불가능하기 때문이며,
 # 스키마 변경 없이 안전하게 제한하기 위한 설계다.
-# DN2026_0100: 40~80분 랜덤 실행(DN2026_0099)으로 하루 실행 수가 약 23회가 되어
+# DN2026_0100: 랜덤 실행(DN2026_0099, DN2026_0102 이후 90~160분 → 하루 약 10~13회)으로
 #   '회당 상한 × 실행 수'가 일 상한 역할을 못 하므로, metadata(foreign_thread) 기준
 #   일일 상한 REPLY_FOREIGN_THREAD_DAILY_CAP을 별도로 둔다 (STD-PUB-09 이중 계수).
 # ⚠️ 기본 비활성(opt-in). P-1(2026-08-18)은 실사고 대응 방어선이다:

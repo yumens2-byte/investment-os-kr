@@ -15,8 +15,9 @@ reply_engine.yml은 10분 틱(cron "3-59/10 * * * *")으로 깨어나고, 이 �
   6) 그 외                                  → SKIP_NOT_DUE
 
 다음 실행 시각 (B3):
-  next = tick_at + U(40, 70)분. 결과가 KST 03시대면 KST 04:00 + U(0, 10)분.
-  10분 틱 해상도 때문에 실제 실행 간격은 40~80분이 된다.
+  next = tick_at + U(90, 150)분. 결과가 KST 03시대면 KST 04:00 + U(0, 10)분.
+  10분 틱 해상도 때문에 실제 실행 간격은 90~160분이 된다.
+  v1.1.0 (2026-11-06, DN2026_0102): 간격 40~80분 → 90~160분 (회장 지시, DN2026_0099 간격 조항 대체).
 
 선점 (DN2026_0099 보완 A, 메인 확정):
   간격은 '시작→시작' 기준이므로 next_run_at은 decide(RUN_DUE) 시점에 선점 기록한다
@@ -31,7 +32,7 @@ import random
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"  # DN2026_0102
 
 KST = timezone(timedelta(hours=9))
 
@@ -42,8 +43,8 @@ SKIP_NIGHT = "SKIP_NIGHT"
 SKIP_GATE_ERROR = "SKIP_GATE_ERROR"
 DECISIONS = (RUN_DUE, SKIP_NOT_DUE, SKIP_NIGHT, SKIP_GATE_ERROR)
 
-GAP_MIN_MINUTES = 40.0
-GAP_MAX_MINUTES = 70.0          # + 10분 틱 해상도 = 실제 간격 상한 80분
+GAP_MIN_MINUTES = 90.0          # DN2026_0102 (이전 40.0, DN2026_0099)
+GAP_MAX_MINUTES = 150.0         # DN2026_0102 — + 10분 틱 해상도 = 실제 간격 상한 160분
 NIGHT_HOUR_KST = 3              # KST 03:00~03:59 실행 제외
 NIGHT_RESUME_HOUR_KST = 4
 NIGHT_RESUME_JITTER_MAX_MINUTES = 10.0

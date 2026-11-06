@@ -1,6 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
+# v2.2.0 (2026-11-06, DN2026_0102) 실행 간격 40~80분 → 90~160분 (reply_engine/schedule.py U(90,150) + 10분 틱)
 # v2.1.0 (2026-11-06, DN2026_0099) 고정 cron 4회 → 40~80분 랜덤 간격 실행 (KST 03시대 제외)
 #   - 10분 틱 + gate job(scripts.reply_schedule_gate decide)이 kr_reply_schedule.next_run_at으로 판정
 #   - gate decide가 RUN_DUE 판정 시 다음 실행 시각 = tick_at + U(40,70)분을 선점 기록 (시작→시작 간격,
@@ -19,7 +20,7 @@ name: X Reply Engine
 # [모드 우선순위] dispatch input > vars.REPLY_MODE > 'dry_run' (schedule 안전 기본값)
 # [cron] DN2026_0099: "3-59/10 * * * *" = 매시 :03/:13/:23/:33/:43/:53 UTC 10분 틱
 #        (정각·반각 회피 STD-SCHED-02). 틱 자체는 실행이 아니다 — gate job의 decision이
-#        RUN_DUE일 때만 test·reply가 돈다. 실제 실행 간격 40~80분, KST 03:00~03:59 실행 없음.
+#        RUN_DUE일 때만 test·reply가 돈다. 실제 실행 간격 90~160분(DN2026_0102), KST 03:00~03:59 실행 없음.
 #        인접 cron 매핑 주석: backdata_card.yml 6행 (STD-SCHED-01 동시 갱신)
 # ──────────────────────────────────────────────────────────────
 

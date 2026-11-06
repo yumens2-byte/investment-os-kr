@@ -1,4 +1,4 @@
-"""DN2026_0099 — X Reply Engine 40~80분 랜덤 간격 실행 게이트 테스트 (STD-CI-10).
+"""DN2026_0099 — X Reply Engine 랜덤 간격 실행 게이트 테스트 (DN2026_0102: 90~160분) (STD-CI-10).
 
 ① 시각 행렬 ② next 계산 ③ 7일 운영 시뮬레이션 ④ yml 정합. Supabase는 mock.
 """
@@ -113,7 +113,7 @@ def test_next_gap_range_daytime():
     rng = random.Random(7)
     tick = kst(2026, 11, 6, 12, 3)
     gaps = [sch.compute_next_run(tick, rng)[1] for _ in range(2000)]
-    assert min(gaps) >= 40.0 and max(gaps) <= 70.0
+    assert min(gaps) >= 90.0 and max(gaps) <= 150.0  # DN2026_0102
 
 
 class FixedRng:
@@ -127,35 +127,35 @@ class FixedRng:
 
 
 def test_next_avoids_night_hour():
-    # 02:30 + 40 = 03:10 → KST 04:00 + 5분
-    nxt, planned = sch.compute_next_run(kst(2026, 11, 6, 2, 30), FixedRng(40.0, 5.0))
+    # DN2026_0102: 01:40 + 90 = 03:10 → KST 04:00 + 5분
+    nxt, planned = sch.compute_next_run(kst(2026, 11, 6, 1, 40), FixedRng(90.0, 5.0))
     assert nxt == kst(2026, 11, 6, 4, 5)
-    assert planned == 95.0
+    assert planned == 145.0
 
 
 def test_next_boundaries_around_night():
-    # 02:19 + 40 = 02:59 → 그대로
-    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 2, 19), FixedRng(40.0))
+    # DN2026_0102: 01:29 + 90 = 02:59 → 그대로
+    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 1, 29), FixedRng(90.0))
     assert nxt == kst(2026, 11, 6, 2, 59)
-    # 02:20 + 40 = 03:00 → 04:00 + 0
-    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 2, 20), FixedRng(40.0, 0.0))
+    # 01:30 + 90 = 03:00 → 04:00 + 0
+    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 1, 30), FixedRng(90.0, 0.0))
     assert nxt == kst(2026, 11, 6, 4, 0)
-    # 02:50 + 70 = 04:00 → 그대로 (03시대 아님)
-    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 2, 50), FixedRng(70.0))
+    # 01:30 + 150 = 04:00 → 그대로 (03시대 아님)
+    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 1, 30), FixedRng(150.0))
     assert nxt == kst(2026, 11, 6, 4, 0)
-    # KST 자정 직전(23:50) 실행 → 익일 00:30~01:00
-    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 23, 50), FixedRng(40.0))
-    assert nxt == kst(2026, 11, 7, 0, 30)
+    # KST 자정 직전(23:50) 실행 → 익일 01:20
+    nxt, _ = sch.compute_next_run(kst(2026, 11, 6, 23, 50), FixedRng(90.0))
+    assert nxt == kst(2026, 11, 7, 1, 20)
 
 
 def test_build_claim_row_gap():
     tick = kst(2026, 11, 6, 12, 3)
     prev = state(tick, tick - timedelta(minutes=52.5))
-    row = sch.build_claim_row("kr_main", tick, prev, now=tick, rng=FixedRng(45.0))
+    row = sch.build_claim_row("kr_main", tick, prev, now=tick, rng=FixedRng(95.0))
     assert row["last_gap_min"] == 52.5
     assert row["last_decision"] == "RUN_DUE"
-    assert sch.parse_ts(row["next_run_at"]) == tick + timedelta(minutes=45)
-    row2 = sch.build_claim_row("kr_main", tick, None, now=tick, rng=FixedRng(45.0))
+    assert sch.parse_ts(row["next_run_at"]) == tick + timedelta(minutes=95)
+    row2 = sch.build_claim_row("kr_main", tick, None, now=tick, rng=FixedRng(95.0))
     assert row2["last_gap_min"] is None
 
 
@@ -217,11 +217,12 @@ def test_seven_day_simulation_no_drop(seed):
     r = simulate(0.0, seed)
     assert r["night_runs"] == 0 and r["overlaps"] == 0
     assert r["long_run_skips"] > 0  # 실행 중 도래한 틱이 선점 덕에 SKIP_NOT_DUE
-    assert all(40.0 <= g <= 80.0 for g in r["day_gaps"]), r["day_gaps"]
-    # 80분 초과 간격은 KST 03시대를 건너는 야간 이월 간격뿐이다 (하루 1회 이하)
-    night_gaps = [g for g in r["gaps"] if g > 80.0]
-    assert len(night_gaps) <= 7 + 1 and all(g <= 160.0 for g in night_gaps)
-    assert min(r["per_day_full"]) >= 17 and max(r["per_day_full"]) <= 30
+    # DN2026_0102: 주간 간격 90~160분
+    assert all(90.0 <= g <= 160.0 for g in r["day_gaps"]), r["day_gaps"]
+    # 160분 초과 간격은 KST 03시대를 건너는 야간 이월 간격뿐이다 (하루 1회 이하)
+    night_gaps = [g for g in r["gaps"] if g > 160.0]
+    assert len(night_gaps) <= 7 + 1 and all(g <= 230.0 for g in night_gaps)
+    assert min(r["per_day_full"]) >= 8 and max(r["per_day_full"]) <= 16
     print(
         f"\n[SIM drop=0 seed={seed}] runs={len(r['runs'])} "
         f"gap(min/max/avg, 야간 제외)={min(r['day_gaps']):.0f}/{max(r['day_gaps']):.0f}/"
@@ -235,8 +236,8 @@ def test_seven_day_simulation_no_drop(seed):
 def test_seven_day_simulation_drop_30(seed):
     r = simulate(0.3, seed)
     assert r["night_runs"] == 0 and r["overlaps"] == 0
-    assert min(r["gaps"]) >= 40.0
-    assert min(r["per_day_full"]) >= 10
+    assert min(r["gaps"]) >= 90.0  # DN2026_0102
+    assert min(r["per_day_full"]) >= 5
     print(
         f"\n[SIM drop=0.3 seed={seed}] runs={len(r['runs'])} "
         f"gap(min/max/avg)={min(r['gaps']):.0f}/{max(r['gaps']):.0f}/"
@@ -249,10 +250,10 @@ def test_seven_day_simulation_drop_30(seed):
 def test_long_run_next_tick_is_not_due():
     """실행이 25분 걸려도 선점된 next_run_at 때문에 다음 틱들은 SKIP_NOT_DUE."""
     t0 = kst(2026, 11, 6, 12, 3)
-    row = sch.build_claim_row("kr_main", t0, None, now=t0, rng=FixedRng(40.0))
-    for m in (10, 20, 30):
+    row = sch.build_claim_row("kr_main", t0, None, now=t0, rng=FixedRng(90.0))
+    for m in (10, 20, 30, 80):
         assert sch.decide(t0 + timedelta(minutes=m), row).decision == sch.SKIP_NOT_DUE
-    assert sch.decide(t0 + timedelta(minutes=40), row).decision == sch.RUN_DUE
+    assert sch.decide(t0 + timedelta(minutes=90), row).decision == sch.RUN_DUE
 
 
 # ---------------------------------------------------------------------------
@@ -356,11 +357,11 @@ def test_gate_decide_run_due_claims_with_cas(monkeypatch, tmp_path):
     db = {"row": {"account": "kr_main", "next_run_at": old_next,
                   "last_tick_at": (now - timedelta(minutes=52)).isoformat()}}
     install_db(monkeypatch, db)
-    d = gate.run_decide(now, rng=FixedRng(55.0))
+    d = gate.run_decide(now, rng=FixedRng(100.0))
     assert d.decision == "RUN_DUE" and "decision=RUN_DUE" in out.read_text()
     op, filters = db["ops"][-1]
     assert op == "update" and filters == {"account": "kr_main", "next_run_at": old_next}
-    assert sch.parse_ts(db["row"]["next_run_at"]) == now + timedelta(minutes=55)
+    assert sch.parse_ts(db["row"]["next_run_at"]) == now + timedelta(minutes=100)
     assert db["row"]["last_gap_min"] == 52.0 and db["row"]["last_tick_at"] == now.isoformat()
     # 같은 상태로 다음 틱 → 선점된 next 때문에 SKIP_NOT_DUE
     later = gate.run_decide(now + timedelta(minutes=10))
@@ -371,7 +372,7 @@ def test_gate_decide_missing_row_inserts(monkeypatch, tmp_path):
     gh_files(monkeypatch, tmp_path)
     db: dict = {}
     install_db(monkeypatch, db)
-    assert gate.run_decide(kst(2026, 11, 6, 12, 3), rng=FixedRng(40.0)).decision == "RUN_DUE"
+    assert gate.run_decide(kst(2026, 11, 6, 12, 3), rng=FixedRng(90.0)).decision == "RUN_DUE"
     assert db["ops"][-1][0] == "insert" and db["row"]["account"] == "kr_main"
 
 
@@ -407,9 +408,9 @@ def test_gate_dispatch_updates_next_even_when_not_due(monkeypatch, tmp_path):
     now = kst(2026, 11, 6, 12, 3)
     db = {"row": state(now + timedelta(minutes=5), now - timedelta(minutes=35))}
     install_db(monkeypatch, db)
-    d = gate.run_decide(now, rng=FixedRng(60.0))
+    d = gate.run_decide(now, rng=FixedRng(120.0))
     assert d.decision == "RUN_DUE" and db["ops"][-1][0] == "upsert"
-    assert sch.parse_ts(db["row"]["next_run_at"]) == now + timedelta(minutes=60)
+    assert sch.parse_ts(db["row"]["next_run_at"]) == now + timedelta(minutes=120)
 
 
 def test_gate_dispatch_runs_even_if_write_fails(monkeypatch, tmp_path, capsys):
