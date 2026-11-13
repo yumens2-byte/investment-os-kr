@@ -16,6 +16,8 @@ X Reply Engine 랜덤 간격 실행 게이트 CLI (DN2026_0099).
 판정·계산은 reply_engine/schedule.py 순수 함수가 한다. 이 파일은 I/O만 담당한다.
 DB 클라이언트는 reply_engine.store.get_client(모듈 전역 조회 → 테스트 patch 가능)를 사용한다.
 
+v1.1.0 (2026-11-13, DN2026_0103): decide 로그에 late_min(= tick_at − next_run_at, RUN_DUE만) 추가.
+  cron 재배치 효과를 Actions 로그로 관측한다 (DB 스키마·판정 불변).
 v1.0.0 (2026-11-06, DN2026_0099): 신설 (선점 방식 — decide 시점 기록, 이중 기록 없음).
   SKIP_GATE_ERROR 알림은 UTC 분 0~9 틱만(시간당 최대 1회), 예외는 클래스명만 기록(STD-SEC-01).
 """
@@ -34,7 +36,7 @@ from pathlib import Path
 from core.alert import send_admin_alert
 from reply_engine import schedule, store
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"  # DN2026_0103
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +109,13 @@ def claim(row: dict, prev_state: dict | None) -> bool:
     return bool(result.data)
 
 
+def late_minutes(d: schedule.Decision) -> float | None:
+    """RUN_DUE 틱이 예정 시각(next_run_at)보다 늦은 분 (DN2026_0103). 해당 없음이면 None."""
+    if d.decision != schedule.RUN_DUE or d.next_run_at is None:
+        return None
+    return round((d.tick_at - d.next_run_at).total_seconds() / 60.0, 1)
+
+
 def run_decide(now: datetime | None = None, *, rng=None) -> schedule.Decision:
     now = now or datetime.now(UTC)
     is_dispatch = os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
@@ -156,6 +165,9 @@ def run_decide(now: datetime | None = None, *, rng=None) -> schedule.Decision:
                 claimed_next = None
 
     extra = f"reason={d.reason}" + (" stale=true" if d.stale else "")
+    late = late_minutes(d)
+    if late is not None:
+        extra += f" late_min={late}"
     if claim_note:
         extra += f" {claim_note}"
     shown_next = claimed_next if claimed_next is not None else d.next_run_at

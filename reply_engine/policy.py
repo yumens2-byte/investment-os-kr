@@ -1,5 +1,8 @@
 """Reply decisions, bounded recovery metadata and intent-specific safe responses.
 
+v2.4.0 (2026-11-13, DN2026_0103): X 확장 경로(extended=True)에서 시점 인사
+  ('금모닝', '불금', '토요모닝')를 GREETING으로 판정. 실측 "드디어 불타늘 금모닝!!",
+  "불금 달려보시쥬ㅎ"가 ACK로 떨어져 범용 문구로 대체되던 문제. FB(extended=False) 불변.
 v2.3.0 (2026-11-06, DN2026_0098): 선택 표지 A~D·1~4번·위/아래·한 표 인식, CHOICE를 WORRY보다
   먼저 판정, 재시도 저장 초안 유지 판정(retry_keeps_stored_text), metadata에 generator_version.
 """
@@ -17,7 +20,7 @@ from reply_engine.config import (
     REPLY_MAX_LENGTH_LONG,
 )
 
-POLICY_VERSION = "2.3.0"  # DN2026_0098
+POLICY_VERSION = "2.4.0"  # DN2026_0103
 DEFER_REASONS = frozenset(
     {
         "RECEIVED",
@@ -129,6 +132,8 @@ _GREETING_PATTERN = re.compile(
     r"|(?:식사|저녁|점심|아침)\s*(?:\S+\s*){0,2}(?:드세|챙기세|하세)"
     r"|맛저|맛점|굿나잇|좋은\s*꿈|푹\s*쉬세|편히\s*쉬세"
 )
+# DN2026_0103 (extended=True, X 전용): 시점 인사. '퇴근·출근'은 감상 댓글과 섞여 제외한다.
+_TIME_GREETING_X = re.compile(r"모닝|불금|불토|불타는\s*금|불타늘\s*금")
 # 기준(5c5246d) 정규식 — extended=False(FB 등) 경로에서 그대로 사용.
 _CHOICE_LETTER_BASE = re.compile(r"(?<![A-Za-z])[ABab](?![A-Za-z])")
 _CHOICE_WORDS_BASE = re.compile(
@@ -238,7 +243,9 @@ def intent_for(text: str, label: str, parent_text: str = "", *, extended: bool =
         return "CHOICE"
     if _is_worry(body):
         return "WORRY"
-    if _GREETING_PATTERN.search(normalize_comment(body)):
+    if _GREETING_PATTERN.search(normalize_comment(body)) or (
+        extended and _TIME_GREETING_X.search(body)  # DN2026_0103
+    ):
         return "GREETING"
     if not extended and is_choice_comment(body, parent_text):
         return "CHOICE"

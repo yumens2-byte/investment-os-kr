@@ -1,0 +1,64 @@
+{
+  "basis": "main f0da91b + DN2026_0103 working tree",
+  "prompt_item_json": {
+    "id": "100",
+    "comment": "불금 달려보시쥬ㅎ",
+    "parent_text": "(원글)",
+    "parent_author_id": "(확인 불가)",
+    "root_author_id": "(확인 불가)",
+    "scope": "OWN_ROOT",
+    "intent": "GREETING",
+    "max_len": 40,
+    "account_user_id": "111",
+    "comment_author_id": "222",
+    "now_kst": "2026-10-31(토) 01:05",
+    "comment_age_min": 425
+  },
+  "gate_replay": [
+    {
+      "published_kst": "2026-10-30T16:19:00+09:00",
+      "comment": "드디어 불타늘 금모닝!! 오늘도 좋은소통 이어서 가시죠ㅎ",
+      "intent": "GREETING",
+      "published_reply": "기분 좋은 아침 시작이네요! 😊",
+      "gate": "GATE_TIME_MISMATCH",
+      "final_reply": "고마워요, 오늘도 무탈한 하루 되세요",
+      "final_source": "TEMPLATE_FALLBACK"
+    },
+    {
+      "published_kst": "2026-10-31T01:05:00+09:00",
+      "comment": "불금 달려보시쥬ㅎ",
+      "intent": "GREETING",
+      "published_reply": "금요일도 활기차게 보내시길 바라요!",
+      "gate": "GATE_TIME_MISMATCH",
+      "final_reply": "인사 남겨주셔서 감사해요 😊",
+      "final_source": "TEMPLATE_FALLBACK"
+    },
+    {
+      "published_kst": "2026-11-01T00:32:00+09:00",
+      "comment": "불금 잘끝내고 이제 토요일 토요모닝입니다 ㅎㅎ",
+      "intent": "GREETING",
+      "published_reply": "주말도 즐겁게 보내세요! 😊",
+      "gate": "PASS",
+      "final_reply": "주말도 즐겁게 보내세요! 😊",
+      "final_source": "AI"
+    },
+    {
+      "published_kst": "2026-11-07T10:10:00+09:00",
+      "comment": "넵 오늘도 건강하고 행복한 하루되세요! 🥹🙏🏻",
+      "intent": "GREETING",
+      "published_reply": "오늘도 좋은 하루 보내세요! 😊",
+      "gate": "PASS",
+      "final_reply": "오늘도 좋은 하루 보내세요! 😊",
+      "final_source": "AI"
+    },
+    {
+      "published_kst": "2026-10-28T21:04:00+09:00",
+      "comment": "류님 저녁 맛있게 드세용 😄😄",
+      "intent": "GREETING",
+      "published_reply": "맛있는 저녁 되셨다니 다행이에요! 😊",
+      "gate": "GATE_ROLE_REVERSAL",
+      "final_reply": "덕분에 기분 좋아졌어요, 즐거운 시간 되세요",
+      "final_source": "TEMPLATE_FALLBACK"
+    }
+  ]
+}

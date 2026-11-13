@@ -17,9 +17,16 @@ reply_engine/gate.py
   GATE_RESTATE      — 댓글 복창형 ("B를 선택하셨군요", "그 긴장감이 느껴지시는군요"), DN2026_0098
   GATE_INTERPRET    — 지어낸 해석 활용형 ("편하셨다니 다행이에요"), DN2026_0098
   GATE_GENERIC      — 긴 의견(OPINION)에 댓글 핵심어 없는 범용 AI 답글, DN2026_0098
+  GATE_TIME_MISMATCH — 답글 시점 표현(아침·저녁·요일·불금·주말) ↔ 게시 시각(KST) 불일치,
+                       DN2026_0103
 
 v2.2.0 (2026-10-28): 길이 상한은 댓글 길이 기준 2단계(reply_max_length).
   CHOICE 의도에서 선택 지지 표현 차단. choose_reply로 AI 후보 → 안전 풀 순서 선택.
+
+v2.4.0 (2026-11-13, DN2026_0103): GATE_TIME_MISMATCH 신설
+  (strict이고 context에 _now_kst가 있을 때만).
+  실측: 금 16:19 "기분 좋은 아침 시작이네요", 토 01:05 "금요일도 활기차게 보내시길 바라요".
+  안전 풀 문구도 같은 게이트를 거친다 (choose_reply → check_reply).
 
 v2.3.0 (2026-11-06, DN2026_0098): GATE_RESTATE·GATE_INTERPRET·GATE_GENERIC 신설
   (14일 실발행 27건 중 복창형 12건 — 문자 bigram GATE_ECHO 실측 0.00~0.46로 전부 통과).
@@ -31,6 +38,7 @@ import logging
 import re
 import unicodedata
 
+from reply_engine import timectx
 from reply_engine.config import (
     BANNED_WORDS,
     REPLY_SIMILARITY_THRESHOLD,
@@ -42,7 +50,7 @@ from reply_engine.policy import (
     reply_max_length,
 )
 
-VERSION = "2.3.0"  # DN2026_0098
+VERSION = "2.4.0"  # DN2026_0103
 
 logger = logging.getLogger(__name__)
 
@@ -355,6 +363,14 @@ def check_reply(
             if echo >= ECHO_SIMILARITY_THRESHOLD:
                 logger.info(f"[Gate] 에코 탈락 ({echo:.2f}): '{text}' ≈ 댓글 '{comment_text}'")
                 return False, "GATE_ECHO"
+
+    # DN2026_0103: 의미 게이트(역할·복창·에코) 다음에 둔다 — 탈락 사유는 의미 오류를 우선 기록.
+    # 시점 표현 ↔ 게시 시각 불일치 (X strict + _now_kst 주입 시에만).
+    if strict and context and context.get("_now_kst") is not None:
+        time_reason = timectx.mismatch(text, context["_now_kst"])
+        if time_reason:
+            logger.info(f"[Gate] GATE_TIME_MISMATCH 탈락: '{text}' ({time_reason})")
+            return False, "GATE_TIME_MISMATCH"
 
     if _FORMAT_PATTERN.search(text):
         return False, "GATE_FORMAT"

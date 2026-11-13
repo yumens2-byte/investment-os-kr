@@ -36,6 +36,11 @@ v2.3.0 (2026-10-28): 상투 문구 수렴 해소.
   - 긴 의견 댓글은 max_len 60, 댓글 속 구체 소재 하나를 받아 호응
   - 걱정·인사·선택·긴 의견 의도 추가 (policy.intent_for)
 
+v2.5.0 (2026-11-13, DN2026_0103): 시간 맥락 주입 (X 전용).
+  항목에 _now_kst가 있을 때만 now_kst(게시 시각 KST)·comment_age_min(댓글 경과 분)을 넣고
+  시점 표현 규칙 한 줄을 추가한다. _now_kst가 없으면 프롬프트는 바이트 단위로 v2.4.0과 같다
+  (FB 경로·기존 X 골든 sha256 불변).
+
 v2.4.0 (2026-11-06, DN2026_0098 A1): X 소재 유지 블록의 복창 유도 문장·예시 제거 →
   "상대 말에 대한 내 반응" 방향으로 교체. FB 경로 문구는 바이트 불변(_SUBJECT_RULE_LEGACY).
 """
@@ -47,12 +52,13 @@ import json
 import logging
 
 from core.gemini_gateway import call as gemini_call
+from reply_engine import timectx
 from reply_engine.lang import is_non_korean
 from reply_engine.policy import SAFE_POOLS, BatchResult, intent_for, reply_max_length
 
 CANDIDATES_PER_ITEM = 3
 
-VERSION = "2.4.0"  # DN2026_0098
+VERSION = "2.5.0"  # DN2026_0103
 
 logger = logging.getLogger(__name__)
 
@@ -161,9 +167,32 @@ def _format_item(item: dict, *, extended: bool = False) -> str:
             **({"account_user_id": item["_account_user_id"],
                 "comment_author_id": item.get("author_id", "")}
                if "_account_user_id" in item else {}),
+            **_time_fields(item),  # DN2026_0103
         },
         ensure_ascii=False,
     )
+
+
+def _time_fields(item: dict) -> dict:
+    """DN2026_0103: _now_kst가 있는 항목만 게시 시각·댓글 경과 분을 넣는다 (X 전용)."""
+    now = item.get("_now_kst")
+    if now is None:
+        return {}
+    fields = {"now_kst": timectx.label(now)}
+    age = timectx.age_minutes(item.get("created_at"), now)
+    if age is not None:
+        fields["comment_age_min"] = age
+    return fields
+
+
+# DN2026_0103: 시점 표현 규칙 (X, _now_kst 주입 시에만 프롬프트에 포함).
+_TIME_RULE = (
+    "now_kst는 이 답글이 게시되는 현재 한국 시각이고 "
+    "comment_age_min은 댓글이 작성된 뒤 지난 분이다. "
+    "아침·점심·저녁·밤·요일·불금·주말 같은 시점 표현은 now_kst와 맞을 때만 쓴다. "
+    "댓글이 말한 시점이 now_kst 기준으로 이미 지났으면 그 시점을 기원하거나 묘사하지 말고 "
+    "시점 없는 인사·감사로 답한다.\n"
+)
 
 
 def contextual_fallbacks(item: dict, *, extended: bool = False) -> tuple[str, ...]:
@@ -294,6 +323,7 @@ def generate_batch(items: list[dict], *, platform: str = "x") -> dict[str, str]:
         "'댓글 잘 봤어요', '관심 가져주셔서 감사해요'처럼 어느 댓글에나 붙는 상투 문구를 피하고 "
         "이 댓글에만 어울리는 표현을 쓴다. 모든 답글을 감사나 화이팅으로 끝내지 않는다.\n"
         + (_subject_rule(platform) if any(i.get("_preserve_subject") for i in ai_items) else "")
+        + (_TIME_RULE if any("_now_kst" in i for i in ai_items) else "")  # DN2026_0103
         + ("recent_response_texts는 최근 발행 문구다. 그 표현과 겹치지 않게 쓴다.\n"
            if any("_recent_texts" in i for i in ai_items) else "")
         + f"{prompt_items}\n"
