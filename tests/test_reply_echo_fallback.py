@@ -153,6 +153,6 @@ def test_f2_fallback_rotates_past_recent_duplicate(monkeypatch):
 
 def test_versions_bumped_f_series():
     """F-1/F-2 반영 버전 확인 (지침 5)."""
-    assert run_reply.VERSION == "2.4.0"  # DN2026_0098
-    assert gate.VERSION == "2.3.0"  # DN2026_0098
-    assert generator.VERSION == "2.4.0"  # DN2026_0098
+    assert run_reply.VERSION == "2.5.0"  # DN2026_0098
+    assert gate.VERSION == "2.4.0"  # DN2026_0098
+    assert generator.VERSION == "2.5.0"  # DN2026_0098

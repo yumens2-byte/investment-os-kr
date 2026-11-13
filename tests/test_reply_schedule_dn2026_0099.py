@@ -347,7 +347,7 @@ def test_gate_decide_skip_writes_summary_and_no_db_write(monkeypatch, tmp_path, 
     assert f"tick_at={now.isoformat()}" in out.read_text()
     assert "next_run_at" in summ.read_text()
     log = capsys.readouterr().out
-    assert re.search(r"\[ReplySchedule\] v1\.0\.0 decide \| SKIP_NOT_DUE \| .+ \| .+ \| 30\.0", log)
+    assert re.search(r"\[ReplySchedule\] v1\.1\.0 decide \| SKIP_NOT_DUE \| .+ \| .+ \| 30\.0", log)
 
 
 def test_gate_decide_run_due_claims_with_cas(monkeypatch, tmp_path):
@@ -440,7 +440,7 @@ def test_gate_report_is_read_only(monkeypatch, tmp_path, capsys):
     saved = json.loads(files[0].read_text())
     assert saved["state"]["next_run_at"] == db["row"]["next_run_at"]
     assert saved["dn"] == "DN2026_0099"
-    assert "[ReplySchedule] v1.0.0 report | RUN_DUE |" in capsys.readouterr().out
+    assert "[ReplySchedule] v1.1.0 report | RUN_DUE |" in capsys.readouterr().out
 
 
 def test_gate_report_failure_is_soft(monkeypatch, tmp_path):
@@ -528,11 +528,15 @@ def _load_yaml():
 
 def test_workflow_cron_and_comments():
     text = WORKFLOW.read_text()
-    assert '- cron: "3-59/10 * * * *"' in text
+    # DN2026_0103: 10분 틱 "3-59/10" → 두 schedule 항목으로 재배치·이중화
+    assert '- cron: "8,26,44 * * * *"' in text
+    assert '- cron: "16,36,52 * * * *"' in text
+    assert '- cron: "3-59/10 * * * *"' not in text
     assert "17 1,4,9,13" not in text
     assert "v2.1.0 (2026-11-06, DN2026_0099)" in text
     backdata = (ROOT / ".github/workflows/backdata_card.yml").read_text().splitlines()[5]
-    assert "3-59/10" in backdata and "1,4,9,13" not in backdata
+    assert "8,26,44" in backdata and "16,36,52" in backdata
+    assert "3-59/10" not in backdata and "1,4,9,13" not in backdata
 
 
 def test_workflow_jobs_wiring():

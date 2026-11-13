@@ -180,9 +180,9 @@ def test_retry_regeneration_branch(monkeypatch, attempts, skip, expected, source
 def test_metadata_records_generator_version_and_keeps_previous():
     raw = policy.encode_metadata({"text": "t", "_generator_version": generator.VERSION})
     meta = policy.decode_metadata(raw)
-    assert meta["generator_version"] == "2.4.0"
+    assert meta["generator_version"] == "2.5.0"
     again = policy.decode_metadata(policy.encode_metadata({"text": "t", "_metadata": meta}))
-    assert again["generator_version"] == "2.4.0"
+    assert again["generator_version"] == "2.5.0"
     assert "generator_version" not in policy.decode_metadata(policy.encode_metadata({"text": "t"}))
 
 

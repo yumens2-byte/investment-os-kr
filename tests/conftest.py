@@ -12,3 +12,18 @@ def _isolate_gemini_unavailable_models(monkeypatch):
     import core.gemini_gateway as gw
 
     monkeypatch.setattr(gw, "_UNAVAILABLE_MODELS", set())
+
+
+# DN2026_0103: 시점 표현 게이트(GATE_TIME_MISMATCH)는 현재 KST에 따라 판정이 달라진다.
+# 파이프라인 테스트가 실행 시각에 따라 흔들리지 않도록 시계를 고정한다.
+# 2026-11-14(토) 13:00 KST — 아침·저녁·밤·불금 표현은 불일치, 점심·주말·토요일은 일치.
+PINNED_UTC = "2026-11-14T04:00:00+00:00"
+
+
+@pytest.fixture(autouse=True)
+def _pin_reply_clock(monkeypatch):
+    from datetime import datetime
+
+    from reply_engine import timectx
+
+    monkeypatch.setattr(timectx, "_utcnow", lambda: datetime.fromisoformat(PINNED_UTC))

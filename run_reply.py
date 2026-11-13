@@ -43,6 +43,9 @@ v2.2.0 (2026-10-07, FB-1):
   리포트 본문을 telemetry.write_run_report로 공통화 (Facebook 러너와 공유).
   판단 흐름·호출 인자·DB 테이블은 변경 없음.
 
+v2.5.0 (2026-11-13, DN2026_0103): 생성 항목·게이트 context에 _now_kst(현재 KST) 주입.
+  생성 프롬프트에 게시 시각·댓글 경과 분이 들어가고, 게이트가 시점 표현 불일치를 차단한다.
+
 v2.4.0 (2026-11-06, DN2026_0098 A4):
   재시도 건 중 발행 시도 0회·결과 불명 아님 → 저장 옛 초안 대신 새 생성 답글 사용.
   발행 시도 이력/결과 불명 건은 저장 문구 유지 (STD-PUB-03·STD-PUB-06).
@@ -63,7 +66,7 @@ from pathlib import Path
 
 from core.alert import send_admin_alert
 from reply_engine import budget as budget_mod
-from reply_engine import classifier, gate, generator, lang, store, telemetry, x_client
+from reply_engine import classifier, gate, generator, lang, store, telemetry, timectx, x_client
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     MENTIONS_MAX_PAGES,
@@ -98,7 +101,7 @@ from reply_engine.policy import (
     retry_keeps_stored_text,
 )
 
-VERSION = "2.4.0"  # DN2026_0098 · DN2026_0100
+VERSION = "2.5.0"  # DN2026_0098 · DN2026_0100 · DN2026_0103
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -649,7 +652,7 @@ def main() -> dict:
             return
         batch = generator.generate_batch([
             {**item, "_recent_texts": recent_texts[-10:], "_account_user_id": my_user_id,
-             "_preserve_subject": True}
+             "_preserve_subject": True, "_now_kst": timectx.now_kst()}  # DN2026_0103
             for item in window
         ])
         replies.update(batch)
@@ -741,7 +744,8 @@ def main() -> dict:
                 # DN2026_0098: 위치 인자 1개 계약(테스트 mock 포함) 유지 — X 표식은 item 키로 전달.
                 drafts, generator.contextual_fallbacks({**tweet, "_platform": "x"}), recent_texts,
                 comment_text=tweet["text"],
-                context={**tweet, "_account_user_id": my_user_id},
+                context={**tweet, "_account_user_id": my_user_id,
+                         "_now_kst": timectx.now_kst()},  # DN2026_0103: 게시 직전 시각
                 strict=True,  # DN2026_0098: X 전용 판정
             )
             if chosen is not None and chosen_source != "AI":
