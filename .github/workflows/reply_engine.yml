@@ -1,6 +1,7 @@
 name: X Reply Engine
 
 # ──────────────────────────────────────────────────────────────
+# v2.4.0 (2026-11-15, DN2026_0104) Reply 단계 env에 REPLY_HUMANIZE_MODE 전달 (사람 문체 변형, 기본 shadow).
 # v2.3.0 (2026-11-13, DN2026_0103) 10분 틱 cron 재배치·이중화 — 실측 RUN_DUE 지연(next_run_at 대비 수 시간)
 #   원인: GitHub schedule 이벤트 지연·누락 (매시 정각 부근 고부하). 틱을 두 schedule 항목으로 나누고
 #   정각(:55~:05)·반각(:28~:32)·인접 cron 분(:07 :23 :38 :41 :47 :55)을 피한다. 판정 로직(gate) 불변.
@@ -282,6 +283,8 @@ jobs:
           REPLY_FOREIGN_THREAD_ENABLED: ${{ vars.REPLY_FOREIGN_THREAD_ENABLED }}
           REPLY_FOREIGN_THREAD_RUN_CAP: ${{ vars.REPLY_FOREIGN_THREAD_RUN_CAP }}
           REPLY_PUBLISH_DELAY_MAX_SEC: ${{ vars.REPLY_PUBLISH_DELAY_MAX_SEC }}
+          # DN2026_0104: 사람 문체 변형 off/shadow/live — 미등록·그 외 값은 shadow(원문 발행)
+          REPLY_HUMANIZE_MODE:    ${{ vars.REPLY_HUMANIZE_MODE }}
           REPLY_LIKE_ENABLED:     ${{ vars.REPLY_LIKE_ENABLED }}
           REPLY_LIKE_PER_RUN:     ${{ vars.REPLY_LIKE_PER_RUN }}
           REPLY_LIKE_PER_DAY:     ${{ vars.REPLY_LIKE_PER_DAY }}

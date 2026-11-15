@@ -43,6 +43,11 @@ v2.2.0 (2026-10-07, FB-1):
   리포트 본문을 telemetry.write_run_report로 공통화 (Facebook 러너와 공유).
   판단 흐름·호출 인자·DB 테이블은 변경 없음.
 
+v2.6.0 (2026-11-15, DN2026_0104): 사람 문체 변형층(reply_engine/humanize.py) 연결.
+  최종 문구 확정 직후, DB 저장·발행 전에 적용한다. 변형안은 게이트를 다시 통과해야 하며
+  탈락하면 원문을 쓴다. 재시도(DB_RETRY) 저장 문구는 변형하지 않는다. 모드 REPLY_HUMANIZE_MODE
+  (off/shadow/live, 기본 shadow): shadow는 변형안을 메타데이터 humanize.preview에만 남긴다.
+
 v2.5.0 (2026-11-13, DN2026_0103): 생성 항목·게이트 context에 _now_kst(현재 KST) 주입.
   생성 프롬프트에 게시 시각·댓글 경과 분이 들어가고, 게이트가 시점 표현 불일치를 차단한다.
 
@@ -66,7 +71,17 @@ from pathlib import Path
 
 from core.alert import send_admin_alert
 from reply_engine import budget as budget_mod
-from reply_engine import classifier, gate, generator, lang, store, telemetry, timectx, x_client
+from reply_engine import (
+    classifier,
+    gate,
+    generator,
+    humanize,
+    lang,
+    store,
+    telemetry,
+    timectx,
+    x_client,
+)
 from reply_engine import filter as filter_mod
 from reply_engine.config import (
     MENTIONS_MAX_PAGES,
@@ -101,7 +116,7 @@ from reply_engine.policy import (
     retry_keeps_stored_text,
 )
 
-VERSION = "2.5.0"  # DN2026_0098 · DN2026_0100 · DN2026_0103
+VERSION = "2.6.0"  # DN2026_0098 · DN2026_0100 · DN2026_0103 · DN2026_0104
 
 _ACCOUNT = "kr_main"  # kr_reply_cursor.account 키
 
@@ -152,6 +167,36 @@ def _cursor_stale_hours(cursor: dict | None) -> int | None:
         logger.warning(f"[Step2] 커서 updated_at 파싱 실패 (관측 생략): {exc}")
         return None
 
+
+
+def _humanize_reply(text: str, tweet: dict, recent_texts: list[str],
+                    my_user_id: str) -> tuple[str, dict | None]:
+    """DN2026_0104: 사람 문체 변형 → 게이트 재검사 → 모드별 채택. (문구, 메타) 반환."""
+    hz_mode = humanize.mode()
+    if hz_mode == "off":
+        return text, None
+    intent = intent_for(tweet["text"], tweet.get("label", ""), tweet.get("parent_text", ""),
+                        extended=True)
+    result = humanize.apply(text, str(tweet["id"]), intent)
+    meta: dict = {"mode": hz_mode, "version": humanize.VERSION, "ops": result.ops,
+                  "applied": False}
+    if not result.changed:
+        return text, meta
+    ok, reason = gate.check_reply(
+        result.text, recent_texts, tweet["text"],
+        context={**tweet, "_account_user_id": my_user_id, "_now_kst": timectx.now_kst()},
+        strict=True,
+    )
+    if not ok:
+        meta.update(reverted=reason, preview=result.text)
+        logger.info(f"[Humanize] 변형안 {reason} 탈락 → 원문 유지: '{result.text}'")
+        return text, meta
+    if hz_mode == "live":
+        meta.update(applied=True, original=text)
+        logger.info(f"[Humanize] {'+'.join(result.ops)}: '{text}' → '{result.text}'")
+        return result.text, meta
+    meta["preview"] = result.text
+    return text, meta
 
 def main() -> dict:
     _setup_logging()
@@ -706,6 +751,7 @@ def main() -> dict:
 
         # 발행 가능 여부 판정 → skip_reason 확정 (DB에 사유까지 기록 — 감사추적)
         draft_gate_reason = None
+        humanize_meta: dict | None = None  # DN2026_0104
         gated = False  # 생성·게이트 단계를 실제로 거쳤는지 (근거 기록 대상)
         reserved = False
         skip_reason: str | None = None
@@ -755,6 +801,15 @@ def main() -> dict:
                 )
                 reply_text = chosen
                 response_source = chosen_source
+            if chosen is not None and response_source != "DB_RETRY":  # DN2026_0104
+                reply_text, humanize_meta = _humanize_reply(
+                    reply_text, tweet, recent_texts, my_user_id)
+                if humanize_meta is not None:
+                    key = ("applied" if humanize_meta.get("applied")
+                           else "reverted" if humanize_meta.get("reverted")
+                           else "preview" if humanize_meta.get("preview") else "unchanged")
+                    counts = summary.setdefault("humanize_counts", {})
+                    counts[key] = counts.get(key, 0) + 1
             if chosen is None:
                 skip_reason = draft_gate_reason
             elif mode == "live" and not guard.can_write():
@@ -774,6 +829,8 @@ def main() -> dict:
                 _intent=intent_for(tweet["text"], tweet["label"], tweet.get("parent_text", ""),
                                    extended=True),  # DN2026_0098
             )
+            if humanize_meta is not None:
+                evidence_tweet["_humanize"] = humanize_meta  # DN2026_0104
             summary["source_counts"][response_source] = (
                 summary["source_counts"].get(response_source, 0) + 1
             )

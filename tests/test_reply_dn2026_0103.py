@@ -221,8 +221,8 @@ def test_decide_log_includes_late_min(monkeypatch, capsys):
 def test_versions():
     assert timectx.VERSION == "1.0.0"
     assert generator.VERSION == "2.5.0"
-    assert gate.VERSION == "2.4.0"
-    assert run_reply.VERSION == "2.5.0"
+    assert gate.VERSION == "2.5.0"
+    assert run_reply.VERSION == "2.6.0"
     assert reply_schedule_gate.VERSION == "1.1.0"
 
 

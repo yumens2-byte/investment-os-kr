@@ -1,5 +1,6 @@
 """Reply decisions, bounded recovery metadata and intent-specific safe responses.
 
+v2.5.0 (2026-11-15, DN2026_0104): 메타데이터에 humanize(모드·변형 목록·채택 여부·원문/변형안) 기록.
 v2.4.0 (2026-11-13, DN2026_0103): X 확장 경로(extended=True)에서 시점 인사
   ('금모닝', '불금', '토요모닝')를 GREETING으로 판정. 실측 "드디어 불타늘 금모닝!!",
   "불금 달려보시쥬ㅎ"가 ACK로 떨어져 범용 문구로 대체되던 문제. FB(extended=False) 불변.
@@ -20,7 +21,7 @@ from reply_engine.config import (
     REPLY_MAX_LENGTH_LONG,
 )
 
-POLICY_VERSION = "2.4.0"  # DN2026_0103
+POLICY_VERSION = "2.5.0"  # DN2026_0104
 DEFER_REASONS = frozenset(
     {
         "RECEIVED",
@@ -331,7 +332,9 @@ def encode_metadata(tweet: dict, *, publish_attempt: bool = False) -> str:
     )
     # 생성 근거 (2026-10-28). 호출부가 넘긴 경우에만 갱신해 이전 근거를 보존한다.
     # DN2026_0098 A4: generator_version — 초안을 만든 생성기 버전 (전달 시에만 갱신, 기존 키 호환).
-    for key in ("response_source", "draft_gate_reason", "intent", "generator_version"):
+    # DN2026_0104: humanize — 사람 문체 변형 기록 (전달 시에만 갱신).
+    for key in ("response_source", "draft_gate_reason", "intent", "generator_version",
+                "humanize"):
         if f"_{key}" in tweet:
             previous[key] = tweet[f"_{key}"]
     if publish_attempt:

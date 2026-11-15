@@ -17,11 +17,15 @@ reply_engine/gate.py
   GATE_RESTATE      — 댓글 복창형 ("B를 선택하셨군요", "그 긴장감이 느껴지시는군요"), DN2026_0098
   GATE_INTERPRET    — 지어낸 해석 활용형 ("편하셨다니 다행이에요"), DN2026_0098
   GATE_GENERIC      — 긴 의견(OPINION)에 댓글 핵심어 없는 범용 AI 답글, DN2026_0098
+  GATE_ADDRESS_ECHO — 댓글이 우리를 부른 호칭('○○님')을 답글이 상대에게 되돌림, DN2026_0104
   GATE_TIME_MISMATCH — 답글 시점 표현(아침·저녁·요일·불금·주말) ↔ 게시 시각(KST) 불일치,
                        DN2026_0103
 
 v2.2.0 (2026-10-28): 길이 상한은 댓글 길이 기준 2단계(reply_max_length).
   CHOICE 의도에서 선택 지지 표현 차단. choose_reply로 AI 후보 → 안전 풀 순서 선택.
+
+v2.5.0 (2026-11-15, DN2026_0104): GATE_ADDRESS_ECHO 신설 (strict 전용).
+  실측 11-15 15:27: "류님 오늘도 좋은 하루 보내세요🌸" → "류님도 편안한 시간 보내세요!"
 
 v2.4.0 (2026-11-13, DN2026_0103): GATE_TIME_MISMATCH 신설
   (strict이고 context에 _now_kst가 있을 때만).
@@ -50,13 +54,15 @@ from reply_engine.policy import (
     reply_max_length,
 )
 
-VERSION = "2.4.0"  # DN2026_0103
+VERSION = "2.5.0"  # DN2026_0104
 
 logger = logging.getLogger(__name__)
 
 # 비허용 스크립트: 가나(일) / CJK 한자 / 키릴 / 태국 / 아랍
 _NON_KR_PATTERN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u0400-\u04ff\u0e00-\u0e7f\u0600-\u06ff]")
 
+# DN2026_0104: 호칭 토큰 '○○님' — 댓글에서 우리를 부른 이름(예: '류님')
+_ADDRESS_PATTERN = re.compile(r"([가-힣A-Za-z]{1,6})님")
 _FORMAT_PATTERN = re.compile(r"#|https?://|t\.co/|@\w+", re.IGNORECASE)
 
 # Count rendered sequences, including skin tones, ZWJ and paired flag indicators.
@@ -363,6 +369,14 @@ def check_reply(
             if echo >= ECHO_SIMILARITY_THRESHOLD:
                 logger.info(f"[Gate] 에코 탈락 ({echo:.2f}): '{text}' ≈ 댓글 '{comment_text}'")
                 return False, "GATE_ECHO"
+
+    # DN2026_0104: 댓글의 '○○님'(우리를 부른 호칭)을 답글에서 상대에게 되돌리지 않는다.
+    if strict:
+        names = set(_ADDRESS_PATTERN.findall(comment_text or ""))
+        echoed = names & set(_ADDRESS_PATTERN.findall(text))
+        if echoed:
+            logger.info(f"[Gate] GATE_ADDRESS_ECHO 탈락: '{text}' ({sorted(echoed)[0]}님)")
+            return False, "GATE_ADDRESS_ECHO"
 
     # DN2026_0103: 의미 게이트(역할·복창·에코) 다음에 둔다 — 탈락 사유는 의미 오류를 우선 기록.
     # 시점 표현 ↔ 게시 시각 불일치 (X strict + _now_kst 주입 시에만).
