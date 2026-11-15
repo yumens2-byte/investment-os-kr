@@ -347,7 +347,7 @@ def test_gate_decide_skip_writes_summary_and_no_db_write(monkeypatch, tmp_path, 
     assert f"tick_at={now.isoformat()}" in out.read_text()
     assert "next_run_at" in summ.read_text()
     log = capsys.readouterr().out
-    assert re.search(r"\[ReplySchedule\] v1\.1\.0 decide \| SKIP_NOT_DUE \| .+ \| .+ \| 30\.0", log)
+    assert re.search(r"\[ReplySchedule\] v1\.2\.0 decide \| SKIP_NOT_DUE \| .+ \| .+ \| 30\.0", log)
 
 
 def test_gate_decide_run_due_claims_with_cas(monkeypatch, tmp_path):
@@ -440,7 +440,7 @@ def test_gate_report_is_read_only(monkeypatch, tmp_path, capsys):
     saved = json.loads(files[0].read_text())
     assert saved["state"]["next_run_at"] == db["row"]["next_run_at"]
     assert saved["dn"] == "DN2026_0099"
-    assert "[ReplySchedule] v1.1.0 report | RUN_DUE |" in capsys.readouterr().out
+    assert "[ReplySchedule] v1.2.0 report | RUN_DUE |" in capsys.readouterr().out
 
 
 def test_gate_report_failure_is_soft(monkeypatch, tmp_path):
