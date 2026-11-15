@@ -16,6 +16,12 @@ X Reply Engine 랜덤 간격 실행 게이트 CLI (DN2026_0099).
 판정·계산은 reply_engine/schedule.py 순수 함수가 한다. 이 파일은 I/O만 담당한다.
 DB 클라이언트는 reply_engine.store.get_client(모듈 전역 조회 → 테스트 patch 가능)를 사용한다.
 
+v1.2.0 (2026-11-15, DN2026_0105): DB 외부 트리거 대응.
+  - workflow_dispatch라도 REPLY_DISPATCH_SOURCE=scheduler면 수동 실행이 아니라
+    schedule과 같은 일반 판정을 한다.
+  - CAS 선점이 결과 없이 끝나면 상태를 다시 읽어, 다른 실행이 이미 선점(next_run_at이
+    미래)했으면 SKIP_NOT_DUE로 끝낸다 (외부 트리거 + 백업 cron 동시 도착 시 오경보 방지).
+    그 외는 기존대로 fail-closed.
 v1.1.0 (2026-11-13, DN2026_0103): decide 로그에 late_min(= tick_at − next_run_at, RUN_DUE만) 추가.
   cron 재배치 효과를 Actions 로그로 관측한다 (DB 스키마·판정 불변).
 v1.0.0 (2026-11-06, DN2026_0099): 신설 (선점 방식 — decide 시점 기록, 이중 기록 없음).
@@ -36,7 +42,7 @@ from pathlib import Path
 from core.alert import send_admin_alert
 from reply_engine import schedule, store
 
-VERSION = "1.1.0"  # DN2026_0103
+VERSION = "1.2.0"  # DN2026_0105
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +115,22 @@ def claim(row: dict, prev_state: dict | None) -> bool:
     return bool(result.data)
 
 
+def dispatch_source() -> str:
+    """DN2026_0105: workflow_dispatch 입력 source (manual | scheduler). 없으면 빈 문자열."""
+    return os.environ.get("REPLY_DISPATCH_SOURCE", "").strip().lower()
+
+
+def _claimed_by_other(now: datetime) -> bool:
+    """DN2026_0105: 선점 실패 직후 재조회 — next_run_at이 미래면 다른 실행이 선점한 것."""
+    try:
+        fresh = load_state()
+    except Exception as exc:
+        logger.error("[ReplySchedule] 선점 경합 재조회 실패: %s", _exc_name(exc))
+        return False
+    nxt = schedule.parse_ts((fresh or {}).get("next_run_at"))
+    return nxt is not None and nxt > now
+
+
 def late_minutes(d: schedule.Decision) -> float | None:
     """RUN_DUE 틱이 예정 시각(next_run_at)보다 늦은 분 (DN2026_0103). 해당 없음이면 None."""
     if d.decision != schedule.RUN_DUE or d.next_run_at is None:
@@ -118,7 +140,9 @@ def late_minutes(d: schedule.Decision) -> float | None:
 
 def run_decide(now: datetime | None = None, *, rng=None) -> schedule.Decision:
     now = now or datetime.now(UTC)
-    is_dispatch = os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
+    source = dispatch_source()
+    is_dispatch = (os.environ.get("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
+                   and source != "scheduler")  # DN2026_0105
     state = None
     load_failed = False
     load_error = ""
@@ -157,6 +181,11 @@ def run_decide(now: datetime | None = None, *, rng=None) -> schedule.Decision:
                 ok, err = False, f"선점 실패: {_exc_name(exc)}"
             if ok:
                 claim_note = f"claim=ok planned_gap_min={planned}"
+            elif not err.startswith("선점 실패") and _claimed_by_other(now):  # DN2026_0105
+                d = dataclasses.replace(
+                    d, decision=schedule.SKIP_NOT_DUE, reason="선점 경합 — 다른 실행이 먼저 선점"
+                )
+                claimed_next = None
             else:
                 _alert_gate_error(now, f"[ReplySchedule] SKIP_GATE_ERROR — {err}")
                 d = dataclasses.replace(
@@ -165,6 +194,8 @@ def run_decide(now: datetime | None = None, *, rng=None) -> schedule.Decision:
                 claimed_next = None
 
     extra = f"reason={d.reason}" + (" stale=true" if d.stale else "")
+    if source:
+        extra += f" source={source}"
     late = late_minutes(d)
     if late is not None:
         extra += f" late_min={late}"

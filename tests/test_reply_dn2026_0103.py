@@ -223,7 +223,7 @@ def test_versions():
     assert generator.VERSION == "2.5.0"
     assert gate.VERSION == "2.5.0"
     assert run_reply.VERSION == "2.6.0"
-    assert reply_schedule_gate.VERSION == "1.1.0"
+    assert reply_schedule_gate.VERSION == "1.2.0"
 
 
 # ── ⑥ 시점 인사 의도 (X 확장 경로만 GREETING) ───────────────────
